@@ -24,7 +24,7 @@ on:
         required: true
         default: true
         type: boolean
-
+    
 jobs:
   setup-release:
 
