@@ -14,7 +14,7 @@ on:
   push:
   pull_request:
     branches:
-      - patch-1
+      - develop
   schedule:
     - cron: '10 1 * * *'
   workflow_dispatch:
