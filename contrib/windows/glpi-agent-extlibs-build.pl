@@ -425,7 +425,7 @@ sub _extract {
 sub run {
     my ($self) = @_;
 
-    if ($self->{config}->{version} eq "__GLPI_AGENT_VERSION__") {
+    if ($self->{config}->{version} eq "__AssetSync_AGENT_VERSION__") {
         $self->{config}->{version} = $GLPI::Agent::Version::VERSION;
         $self->{config}->{use_glpi_version} = 1;
     }
@@ -471,7 +471,7 @@ sub run {
 
     # Updates for _resolve method
     $self->{config}->{src} = "../$folder";
-    $self->{config}->{absolute_src} = "/c/Strawberry-perl-for-GLPI-Agent_build/build/$folder";
+    $self->{config}->{absolute_src} = "/c/Strawberry-perl-for-AssetSync-Agent_build/build/$folder";
     $self->{config}->{dllsuffix} = $self->global->{_dllsuffix} unless $self->{config}->{dllsuffix};
     $self->{config}->{install_prefix} = catdir($self->global->{image_dir}, "c");
     $self->{config}->{prefix} = $self->{config}->{install_prefix};
