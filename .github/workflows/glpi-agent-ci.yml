@@ -119,7 +119,7 @@ jobs:
       id: built-perl-cache
       with:
         path: |
-            C:/Strawberry-perl-for-GLPI-Agent_build/restore
+            C:/Strawberry-perl-for-AssetSync-Agent_build/restore
         key: windows-packaging-perl-cache-x64-${{ hashFiles('contrib\windows\glpi-agent-extlibs-build.pl', 'contrib\windows\glpi-agent-packaging.pl', 'contrib\windows\packaging\*') }}
     - name: Log warning on cache miss
       if: steps.built-perl-cache.outputs.cache-hit != 'true'
