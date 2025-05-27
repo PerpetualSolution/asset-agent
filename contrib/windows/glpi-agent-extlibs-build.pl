@@ -425,7 +425,7 @@ sub _extract {
 sub run {
     my ($self) = @_;
 
-    if ($self->{config}->{version} eq "__AssetSync_AGENT_VERSION__") {
+    if ($self->{config}->{version} eq "__GLPI_AGENT_VERSION__") {
         $self->{config}->{version} = $GLPI::Agent::Version::VERSION;
         $self->{config}->{use_glpi_version} = 1;
     }
