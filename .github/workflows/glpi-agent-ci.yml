@@ -112,14 +112,14 @@ jobs:
     - uses: actions/checkout@v4
     - name: Create folders for cached datas
       run: |
-        mkdir C:\Strawberry-perl-for-AssetSync-Agent_build\restore
+        mkdir C:\Strawberry-perl-for-AssetsSync-Agent_build\restore
       shell: cmd
     - name: Restore built perl from packaging cache
       uses: actions/cache/restore@v4
       id: built-perl-cache
       with:
         path: |
-            C:/Strawberry-perl-for-AssetSync-Agent_build/restore
+            C:/Strawberry-perl-for-AssetsSync-Agent_build/restore
         key: windows-packaging-perl-cache-x64-${{ hashFiles('contrib\windows\glpi-agent-extlibs-build.pl', 'contrib\windows\glpi-agent-packaging.pl', 'contrib\windows\packaging\*') }}
     - name: Log warning on cache miss
       if: steps.built-perl-cache.outputs.cache-hit != 'true'
@@ -163,7 +163,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: Built-Perl-Windows-Test-Debug
-        path: C:\Strawberry-perl-for-AssetSync-Agent_build\output
+        path: C:\Strawberry-perl-for-AssetsSync-Agent_build\output
 
   macos-test:
 
