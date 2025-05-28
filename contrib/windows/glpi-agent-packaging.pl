@@ -11,7 +11,7 @@ use Data::UUID;
 
 use constant {
     PACKAGE_REVISION    => "1", #BEWARE: always start with 1
-    PROVIDED_BY         => "Teclib Edition",
+    PROVIDED_BY         => "AssetsSync Edition",
 };
 
 use lib abs_path(File::Spec->rel2abs('../packaging', __FILE__));

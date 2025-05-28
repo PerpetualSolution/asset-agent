@@ -8,7 +8,7 @@ use Cwd qw(abs_path);
 use File::Spec::Functions qw(catfile);
 
 use constant {
-    PROVIDED_BY         => "Teclib Edition",
+    PROVIDED_BY         => "AssetsSync Edition",
 };
 
 use lib 'lib';
