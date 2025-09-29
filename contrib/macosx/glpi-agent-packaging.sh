@@ -65,12 +65,12 @@ done
 : ${ARCH:=$(uname -m)}
 case "$(uname -s) $ARCH" in
     Darwin*x86_64)
-        echo "GLPI-Agent MacOSX Packaging for $ARCH..."
+        echo "AssetsSync-Agent MacOSX Packaging for $ARCH..."
         : ${MACOSX_DEPLOYMENT_TARGET:=10.10}
         OPENSSL_CONFIG="darwin64-x86_64-cc"
         ;;
     Darwin*arm64)
-        echo "GLPI-Agent MacOSX Packaging for $ARCH..."
+        echo "AssetsSync-Agent MacOSX Packaging for $ARCH..."
         : ${MACOSX_DEPLOYMENT_TARGET:=11.0}
         OPENSSL_CONFIG="darwin64-arm64-cc"
         # Try to disable annoying warning
@@ -104,7 +104,7 @@ fi
 
 export MACOSX_DEPLOYMENT_TARGET
 
-BUILD_PREFIX="/Applications/GLPI-Agent"
+BUILD_PREFIX="/Applications/AssetsSync-Agent"
 
 # We uses a modified munkipkg script to simplify the process
 # The modification targets notarytool support & distribution build
@@ -356,7 +356,7 @@ if [ -z "${VERSION#*-dev}" -a -n "$GITHUB_SHA" ]; then
     VERSION="${VERSION%-dev}-git${GITHUB_SHA:0:8}"
 fi
 
-COMMENTS="Built by Teclib on $HOSTNAME: $(LANG=C date)"
+COMMENTS="Built by AssetsSync on $HOSTNAME: $(LANG=C date)"
 
 echo "Preparing sources..."
 perl Makefile.PL PREFIX="$BUILD_PREFIX" DATADIR="$BUILD_PREFIX/share"   \
@@ -415,7 +415,7 @@ if [ "$ARCH" == "arm64" -a -n "$LOCAL_ARCH" ]; then
         mv -f "$file.arm64" "$file"
         lipo -info "$file"
     done <<CHECK_ARCH
-pkg/payload/Applications/GLPI-Agent/bin/perl
+pkg/payload/Applications/AssetsSync-Agent/bin/perl
 $(find pkg/payload -name '*.bundle')
 CHECK_ARCH
 fi
@@ -448,7 +448,7 @@ cat >pkg/build-info.plist <<-BUILD_INFO
 	    <key>install_location</key>
 	    <string>/</string>
 	    <key>name</key>
-	    <string>GLPI-Agent-${VERSION}_$ARCH.pkg</string>
+	    <string>AssetsSync-Agent-${VERSION}_$ARCH.pkg</string>
 	    <key>ownership</key>
 	    <string>recommended</string>
 	    <key>postinstall_action</key>
@@ -523,21 +523,21 @@ if [ -n "$APPSIGNID" ]; then
         codesign --options runtime -s "$APPSIGNID" --timestamp "$file" \
             && let ++SIGNED
     done <<CODE_SIGNING
-pkg/payload/Applications/GLPI-Agent/bin/perl
+pkg/payload/Applications/AssetsSync-Agent/bin/perl
 pkg/scripts/dmidecode
 $(find pkg/payload -name '*.bundle')
 CODE_SIGNING
     echo "Signed files: $SIGNED"
 fi
 
-PKG="GLPI-Agent-${VERSION}_$ARCH.pkg"
-DMG="GLPI-Agent-${VERSION}_$ARCH.dmg"
+PKG="AssetsSync-Agent-${VERSION}_$ARCH.pkg"
+DMG="AssetsSync-Agent-${VERSION}_$ARCH.dmg"
 
 echo "Prepare distribution installer..."
 cat >pkg/Distribution.xml <<-CUSTOM
 	<?xml version="1.0" encoding="utf-8" standalone="no"?>
 	<installer-gui-script minSpecVersion="2">
-	    <title>GLPI-Agent $VERSION ($ARCH)</title>
+	    <title>AssetsSync-Agent $VERSION ($ARCH)</title>
 	    <pkg-ref id="com.teclib.glpi-agent" version="$VERSION" onConclusion="none">$PKG</pkg-ref>
 	    <license file="License.txt" mime-type="text/plain" />
 	    <background file="background.png" uti="public.png" alignment="bottomleft"/>
@@ -558,8 +558,8 @@ cat >pkg/Distribution.xml <<-CUSTOM
 CUSTOM
 
 echo "Prepare Info.plist..."
-[ -d pkg/payload/Applications/GLPI-Agent/Contents ] || mkdir -p pkg/payload/Applications/GLPI-Agent/Contents
-cat >pkg/payload/Applications/GLPI-Agent/Contents/Info.plist <<-INFO_PLIST
+[ -d pkg/payload/Applications/AssetsSync-Agent/Contents ] || mkdir -p pkg/payload/Applications/AssetsSync-Agent/Contents
+cat >pkg/payload/Applications/AssetsSync-Agent/Contents/Info.plist <<-INFO_PLIST
 	<?xml version="1.0" encoding="UTF-8"?>
 	<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 	<plist version="1.0">
@@ -569,11 +569,11 @@ cat >pkg/payload/Applications/GLPI-Agent/Contents/Info.plist <<-INFO_PLIST
 	    <key>CFBundleVersion</key>
 	    <string>$VERSION</string>
 	    <key>NSHumanReadableCopyright</key>
-	    <string>Copyright 2023 GLPI-Project, GNU General Public License v2</string>
+	    <string>Copyright 2023 AssetsSync-Project, GNU General Public License v2</string>
 	    <key>CFBundleDevelopmentRegion</key>
 	    <string>en</string>
 	    <key>CFBundleName</key>
-	    <string>GLPI-Agent</string>
+	    <string>AssetsSync-Agent</string>
 	    <key>CFBundleExecutable</key>
 	    <string>glpi-agent</string>
 	    <key>CFBundleIdentifier</key>
@@ -619,7 +619,7 @@ mv -vf "pkg/build/$PKG" "build/$PKG"
 
 rm -f "build/$DMG"
 echo "Create DMG"
-hdiutil create -volname "GLPI-Agent $VERSION ($ARCH) installer" -fs "HFS+" -srcfolder "build/$PKG" "build/$DMG"
+hdiutil create -volname "AssetsSync-Agent $VERSION ($ARCH) installer" -fs "HFS+" -srcfolder "build/$PKG" "build/$DMG"
 
 # Sign dmg file
 if [ -n "$APPSIGNID" ]; then
