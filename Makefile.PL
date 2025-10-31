@@ -14,7 +14,7 @@ include 'Module::AutoInstall';
 abstract 'GLPI unified Agent for UNIX, Linux, Windows and MacOSX';
 license 'gpl';
 repository 'https://github.com/glpi-project/glpi-agent';
-version '1.13-dev';
+version '1.16-dev';
 perl_version '5.008';
 authors 'Teclib Editions';
 
@@ -248,7 +248,7 @@ sub install {
 config_install : pure_install
 	$(MKPATH) $(DESTDIR)$(SYSCONFDIR)
 	$(NOECHO) $(CHMOD) $(PERM_DIR) $(DESTDIR)$(SYSCONFDIR)
-	for config in agent.cfg $(shell cd etc; echo *-plugin.cfg ); \
+	for config in agent.cfg $(shell cd etc; echo *-plugin.cfg ) snmp-advanced-support.cfg; \
 	do \
 	  if $(TEST_F) $(DESTDIR)$(SYSCONFDIR)/$$config; then \
 	    $(RM_F) $(DESTDIR)$(SYSCONFDIR)/$$config.new; \

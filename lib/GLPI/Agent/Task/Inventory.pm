@@ -124,6 +124,8 @@ sub run {
         datadir  => $self->{datadir},
         logger   => $self->{logger},
         glpi     => $self->{target}->getTaskVersion('inventory'),
+        required => $self->{config}->{'required-category'} // [],
+        itemtype => empty($self->{config}->{'itemtype'}) ? "Computer" : $self->{config}->{'itemtype'},
         tag      => $tag
     );
 
@@ -189,8 +191,8 @@ sub setupEvent {
     my ($self) = @_;
 
     my $event = $self->resetEvent();
-    if ($self->{target}->isType('server') && !$self->{target}->isGlpiServer()) {
-        $self->{logger}->debug($self->{target}->id().": server target for inventory events need to be a GLPI server");
+    if ($self->{target}->isType('server') && !$self->{target}->isGlpiServer() && $event->partial) {
+        $self->{logger}->debug($self->{target}->id().": server target for partial inventory events need to be a GLPI server");
         return;
     }
 
@@ -593,7 +595,7 @@ sub _injectContent {
         my $json = GLPI::Agent::Protocol::Message->new(
             file => $file,
         );
-        $content = $json->get('content');
+        $content = $json->get('content', transform => "upperkeys");
         unless ($content) {
             $self->{logger}->error(
                 "failing to import $file file content in the inventory"

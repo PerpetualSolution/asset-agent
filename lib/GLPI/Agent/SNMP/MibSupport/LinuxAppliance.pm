@@ -59,8 +59,9 @@ use constant    snmpEngine      => snmpModules . '.10.2.1';
 use constant    snmpEngineID    => snmpEngine . '.1.0';
 
 # HOST-RESOURCES-MIB
-use constant    hrStorageEntry  => iso . '.25.2.3.1.3';
-use constant    hrSWRunName     => iso . '.25.4.2.1.2';
+use constant    hrStorageEntry      => iso . '.25.2.3.1.3';
+use constant    hrSWRunName         => iso . '.25.4.2.1.2';
+use constant    hrSWInstalledName   => iso . '.25.6.3.1.2';
 
 # UBNT-UniFi-MIB
 use constant    ubntUniFi               => ubnt . '.1.6' ;
@@ -72,6 +73,17 @@ use constant    upsIdent    => socomec . '.1.1.7.1.1' ;
 use constant    upsIdentModel                   => upsIdent . '.1.0' ;
 use constant    upsIdentSerialNumber            => upsIdent . '.2.0' ;
 use constant    upsIdentAgentSoftwareVersion    => upsIdent . '.5.0' ;
+
+# Printer-MIB
+use constant    prtGeneral  => iso . '.43.5';
+use constant    prtGeneralPrinterName   => prtGeneral . '.1.1.16.1';
+
+# Quantum MIB
+use constant    quantum         => enterprises . '.2036.2';
+use constant    qVendorId       => quantum . '.1.1.4.0';
+use constant    qProdId         => quantum . '.1.1.5.0';
+use constant    qProdRev        => quantum . '.1.1.6.0';
+use constant    qSerialNumber   => quantum . '.1.1.12.0';
 
 our $mibSupport = [
     {
@@ -155,6 +167,19 @@ sub getType {
         return 'NETWORKING';
     }
 
+    # Quantum Appliance detection
+    my $qVendorId = getCanonicalString($self->get(qVendorId));
+    if ($qVendorId) {
+        $device->{_Appliance} = {
+            MODEL           => getCanonicalString($self->get(qProdId)),
+            MANUFACTURER    => $qVendorId,
+            FIRMWARE        => getCanonicalString($self->get(qProdRev)),
+            SERIAL          => getCanonicalString($self->get(qSerialNumber)),
+            _QUANTUM        => 1,
+        };
+        return 'NETWORKING';
+    }
+
     # sysDescr analysis
     my $sysDescr =  getCanonicalString($self->get(sysDescr));
     if ($sysDescr) {
@@ -167,6 +192,18 @@ sub getType {
             };
             return 'NETWORKING';
         }
+    }
+
+    # Printer detection
+    my $prtGeneralPrinterName = $self->get(prtGeneralPrinterName);
+    if ($prtGeneralPrinterName) {
+        $device->{_Appliance} = {
+            MODEL           => $prtGeneralPrinterName,
+        };
+        # Katusha printer support
+        $device->{_Appliance}->{MANUFACTURER} = "Katusha"
+            if $sysDescr && $sysDescr =~ /^Katusha/i;
+        return 'PRINTER';
     }
 
     # SNMP-FRAMEWORK-MIB: Analyze snmpEngineID which can gives:
@@ -205,6 +242,15 @@ sub getType {
                 $device->{_Appliance}->{MODEL} = 'FMC';
                 $device->{_Appliance}->{MANUFACTURER} = 'Cisco';
                 return 'NETWORKING';
+            } elsif ($sysDescr && $sysDescr =~ /^(Omada .*)$/i) {
+                # Omada models TP-Link detection
+                $device->{_Appliance}->{MODEL} = $1;
+                $device->{_Appliance}->{MANUFACTURER} = 'TP-Link';
+                return 'NETWORKING';
+            } elsif ($self->_hasInstalled(qr/^VRTSnbserver-/)) {
+                $device->{_Appliance}->{MODEL} = 'Veritas NetBackup';
+                $device->{_Appliance}->{MANUFACTURER} = 'Veritas Technologies LLC';
+                return 'NETWORKING';
             }
             return $match->{type};
         }
@@ -222,6 +268,19 @@ sub _hasProcess {
     return unless $self->{hrSWRunName};
 
     return any { getCanonicalString($_) eq $name } values(%{$self->{hrSWRunName}});
+}
+
+sub _hasInstalled {
+    my ($self, $qrName) = @_;
+
+    return unless $qrName;
+
+    # Cache the walk result in the case we have to answer many _hasInstalled() calls
+    $self->{hrSWInstalledName} ||= $self->walk(hrSWInstalledName);
+
+    return unless $self->{hrSWInstalledName};
+
+    return any { getCanonicalString($_) =~ $qrName } values(%{$self->{hrSWInstalledName}});
 }
 
 sub getModel {
@@ -273,7 +332,15 @@ sub getSerial {
         $serial = $self->get(upsIdentSerialNumber);
     } elsif ($device->{_Appliance} && $device->{_Appliance}->{SERIAL}) {
         $serial = $device->{_Appliance}->{SERIAL};
+
+        # Also fix location on Quantum as it seems badly encoded
+        if ($device->{_Appliance}->{_QUANTUM}) {
+            if ($device->{LOCATION} && $device->{LOCATION} =~ /^[0-9a-f]+$/ && length($device->{LOCATION}) % 2 != 1) {
+                $device->{LOCATION} = getCanonicalString(pack("H*", $device->{LOCATION}));
+            }
+        }
     }
+
 
     return $serial;
 }
@@ -388,6 +455,14 @@ sub run {
         $firmware = {
             NAME            => $self->getModel(),
             DESCRIPTION     => "Firmware version",
+            TYPE            => "system",
+            VERSION         => $device->{_Appliance}->{FIRMWARE},
+            MANUFACTURER    => $manufacturer
+        };
+    } elsif ($device->{_Appliance} && $device->{_Appliance}->{_QUANTUM}) {
+        $firmware = {
+            NAME            => $self->getModel(),
+            DESCRIPTION     => "Product revision number",
             TYPE            => "system",
             VERSION         => $device->{_Appliance}->{FIRMWARE},
             MANUFACTURER    => $manufacturer

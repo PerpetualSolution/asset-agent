@@ -30,7 +30,7 @@ jobs:
           libtest-mockmodule-perl libtest-mockobject-perl libtest-nowarnings-perl \
           libtest-exception-perl libtest-perl-critic-perl libtest-pod-perl \
           libextutils-helpers-perl libextutils-installpaths-perl libmodule-build-tiny-perl \
-          libtest-cpan-meta-perl
+          libtest-cpan-meta-perl libcrypt-des-perl libdigest-hmac-perl
     - name: Check environment
       id: check-version
       run: |
@@ -50,7 +50,7 @@ jobs:
         make test
     - name: Run Author tests
       run: |
-        make test TEST_AUTHOR=1 TEST_FILES="t/02critic.t t/03var.t t/04pod-syntax.t t/06pod-spelling.t t/07whitespaces.t t/09cpanmeta.t"
+        make test TEST_AUTHOR=1 TEST_FILES="t/02critic.t t/03var.t t/04pod-syntax.t t/06pod-spelling.t t/06pod-listed-categories.t t/07whitespaces.t t/09cpanmeta.t"
 
   windows-test:
 
@@ -208,7 +208,7 @@ jobs:
       if: steps.cache.outputs.cache-hit != 'true'
       run: |
         cpanm --sudo --installdeps --verbose --notest .
-        cpanm --sudo --verbose --notest Parse::EDID
+        cpanm --sudo --verbose --notest Parse::EDID Crypt::DES Digest::HMAC
     - name: Prepare Makefile
       run: perl Makefile.PL
     - name: Run make

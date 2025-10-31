@@ -33,7 +33,7 @@ my %tests = (
     '7' => [
         {
             ID           => 'BFEBFBFF000206A7',
-            NAME         => 'Intel Core i5-2300 CPU @ 2.80GHz',
+            NAME         => 'Intel(R) Core(TM) i5-2300 CPU @ 2.80GHz',
             SERIAL       => undef,
             MANUFACTURER => 'Intel',
             DESCRIPTION  => 'x86 Family 6 Model 42 Stepping 7',
@@ -49,7 +49,7 @@ my %tests = (
     '2003' => [
         {
             ID           => 'BFEBFBFF00000F29',
-            NAME         => 'Intel Xeon CPU 3.06GHz',
+            NAME         => 'Intel(R) Xeon(TM) CPU 3.06GHz',
             SERIAL       => undef,
             MANUFACTURER => 'Intel',
             DESCRIPTION  => 'x86 Family 15 Model 2 Stepping 9',
@@ -62,7 +62,7 @@ my %tests = (
         },
         {
             ID           => '0000000000000000',
-            NAME         => 'Intel Xeon CPU 3.06GHz',
+            NAME         => 'Intel(R) Xeon(TM) CPU 3.06GHz',
             SERIAL       => undef,
             MANUFACTURER => 'Intel',
             DESCRIPTION  => 'x86 Family 15 Model 2 Stepping 9',
@@ -77,7 +77,7 @@ my %tests = (
     '2003SP2' => [
         {
             ID           => '0FEBBBFF00010676',
-            NAME         => 'Intel Xeon CPU E5440 @ 2.83GHz',
+            NAME         => 'Intel(R) Xeon(R) CPU E5440 @ 2.83GHz',
             SERIAL       => undef,
             MANUFACTURER => 'Intel',
             DESCRIPTION  => 'x86 Family 6 Model 23 Stepping 6',
@@ -90,7 +90,7 @@ my %tests = (
         },
         {
             ID           => '0FEBBBFF00000676',
-            NAME         => 'Intel Xeon CPU E5440 @ 2.83GHz',
+            NAME         => 'Intel(R) Xeon(R) CPU E5440 @ 2.83GHz',
             SERIAL       => undef,
             MANUFACTURER => 'Intel',
             DESCRIPTION  => 'x86 Family 6 Model 23 Stepping 6',
@@ -148,7 +148,7 @@ my %tests = (
     '2008-with-2-different-cpus' => [
         {
             ID           => 'BFEBFBFF000106A5',
-            NAME         => 'Intel Xeon CPU E5504 @ 2.00GHz',
+            NAME         => 'Intel(R) Xeon(R) CPU E5504 @ 2.00GHz',
             SERIAL       => undef,
             MANUFACTURER => 'Intel',
             DESCRIPTION  => 'Intel64 Family 6 Model 26 Stepping 5',
@@ -161,7 +161,7 @@ my %tests = (
         },
         {
             ID           => 'BFEBFBFF000106A5',
-            NAME         => 'Intel Xeon CPU E5506 @ 2.13GHz',
+            NAME         => 'Intel(R) Xeon(R) CPU E5506 @ 2.13GHz',
             SERIAL       => undef,
             MANUFACTURER => 'Intel',
             DESCRIPTION  => 'Intel64 Family 6 Model 26 Stepping 5',

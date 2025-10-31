@@ -240,19 +240,18 @@ my %printer_pagecounters_variables = (
 sub _getDevice {
     my (%params) = @_;
 
-    my $snmp    = $params{snmp};
     my $datadir = $params{datadir};
     my $logger  = $params{logger};
     my $config  = $params{config};
 
     my $device = GLPI::Agent::SNMP::Device->new(
-        snmp   => $snmp,
+        snmp   => $params{snmp},
         glpi   => $params{glpi} // '', # glpi server version if we need to check feature support
         logger => $logger
     );
 
     # manufacturer, type and model identification attempt, using sysObjectID
-    my $sysobjectid = $snmp->get('.1.3.6.1.2.1.1.2.0');
+    my $sysobjectid = $device->get('.1.3.6.1.2.1.1.2.0');
     if ($sysobjectid) {
         my $match = _getSysObjectIDInfo(
             id      => $sysobjectid,
@@ -268,7 +267,7 @@ sub _getDevice {
 
     # manufacturer and type identification attempt, using sysDescr,
     # if one of them is missing
-    my $sysdescr = $snmp->get('.1.3.6.1.2.1.1.1.0');
+    my $sysdescr = $device->get('.1.3.6.1.2.1.1.1.0');
     if ($sysdescr) {
         $device->{DESCRIPTION} = getCanonicalString($sysdescr);
 
@@ -308,8 +307,8 @@ sub _getDevice {
     # fallback type identification attempt, using type-specific OID presence
     if (!exists $device->{TYPE}) {
          if (
-             $snmp->get('.1.3.6.1.2.1.43.11.1.1.6.1.1') ||
-             $snmp->get('.1.3.6.1.2.1.25.3.2.1.3.1')
+             $device->get('.1.3.6.1.2.1.43.11.1.1.6.1.1') ||
+             $device->get('.1.3.6.1.2.1.25.3.2.1.3.1')
          ) {
             $device->{TYPE} = 'PRINTER'
         }
@@ -457,12 +456,11 @@ sub _loadSysObjectIDDatabase {
 sub getDeviceFullInfo {
     my (%params) = @_;
 
-    my $snmp   = $params{snmp};
     my $logger = $params{logger};
 
     # first, let's retrieve basic device informations
-    my $device = _getDevice(%params);
-    return unless $device;
+    my $device = _getDevice(%params)
+        or return;
 
     my $info = $device->getDiscoveryInfo();
 
@@ -496,20 +494,17 @@ sub getDeviceFullInfo {
 
     _setGenericProperties(
         device => $device,
-        snmp   => $snmp,
         logger => $logger
     );
 
     _setPrinterProperties(
         device  => $device,
-        snmp    => $snmp,
         logger  => $logger,
         datadir => $params{datadir}
     ) if $info->{TYPE} && $info->{TYPE} eq 'PRINTER';
 
     _setNetworkingProperties(
         device  => $device,
-        snmp    => $snmp,
         logger  => $logger,
         datadir => $params{datadir}
     ) if $info->{TYPE} && $info->{TYPE} eq 'NETWORKING';
@@ -521,13 +516,15 @@ sub getDeviceFullInfo {
             function => "run",
             logger   => $logger,
             params   => {
-                snmp   => $snmp,
                 device => $device,
                 logger => $logger,
             },
             load     => 1
         );
     }
+
+    # Set components without device type restriction
+    $device->setComponents();
 
     # Run any detected mib support
     $device->runMibSupport();
@@ -536,9 +533,7 @@ sub getDeviceFullInfo {
     my $ports = $device->{PORTS}->{PORT};
     if ($ports && %$ports) {
         $device->{PORTS}->{PORT} = [
-            map { $ports->{$_} }
-            sort { _numify($a) <=> _numify($b) }
-            keys %{$ports}
+            map { $ports->{$_} } sortedPorts($ports)
         ];
     } else {
         delete $device->{PORTS};
@@ -547,22 +542,11 @@ sub getDeviceFullInfo {
     return $device->getInventory();
 }
 
-sub _numify {
-    my ($num) = @_;
-    return int($num) if $num =~ /^\d+$/;
-    return 0 unless $num =~ /^[0-9.]+$/;
-    # Here we have digits separated by dots and maybe more than one like seen on Sophos devices
-    my @digits = split(/\./, $num);
-    $num = shift @digits;
-    # Manage to have a real number even when more than one dot are found
-    return $num.".".join("", map { sprintf("%03d", $_) } @digits);
-}
-
 sub _setGenericProperties {
     my (%params) = @_;
 
-    my $device = $params{device};
-    my $snmp   = $params{snmp};
+    my $device = $params{device}
+        or return;
     my $logger = $params{logger};
 
     # ports is a sparse hash of network ports, indexed by interface identifier
@@ -576,11 +560,11 @@ sub _setGenericProperties {
         my $results;
         if (ref $variable->{oid} eq 'ARRAY') {
             foreach my $oid (@{$variable->{oid}}) {
-                $results = $snmp->walk($oid);
+                $results = $device->walk($oid);
                 last if $results;
             }
         } else {
-            $results = $snmp->walk($variable->{oid});
+            $results = $device->walk($variable->{oid});
         }
         next unless $results;
 
@@ -608,8 +592,8 @@ sub _setGenericProperties {
         }
     }
 
-    my $highspeed_results = $snmp->walk('.1.3.6.1.2.1.31.1.1.1.15');
-    my $speed_results     = $snmp->walk('.1.3.6.1.2.1.2.2.1.5');
+    my $highspeed_results = $device->walk('.1.3.6.1.2.1.31.1.1.1.15');
+    my $speed_results     = $device->walk('.1.3.6.1.2.1.2.2.1.5');
     # ifSpeed is expressed in b/s, and available for all interfaces
     # HighSpeed is expressed in Mb/s, available for fast interfaces only
     while (my ($suffix, $speed_value) = each %{$speed_results}) {
@@ -618,7 +602,7 @@ sub _setGenericProperties {
             $highspeed_value * 1000 * 1000 : $speed_value;
     }
 
-    my $results = $snmp->walk('.1.3.6.1.2.1.4.20.1.2');
+    my $results = $device->walk('.1.3.6.1.2.1.4.20.1.2');
     # each result matches the following scheme:
     # $prefix.$i.$j.$k.$l = $value
     # with $i.$j.$k.$l as IP address, and $value as port id
@@ -626,7 +610,7 @@ sub _setGenericProperties {
         my $value = $results->{$suffix};
         next unless $value;
         # value must match IFNUMBER
-        my $portindex = first { $ports->{$_}->{IFNUMBER} eq $value } keys(%{$ports});
+        my $portindex = first { defined($ports->{$_}->{IFNUMBER}) && $ports->{$_}->{IFNUMBER} eq $value } keys(%{$ports});
         # safety checks
         unless ($portindex) {
             $logger->debug(
@@ -642,26 +626,52 @@ sub _setGenericProperties {
         push @{$ports->{$portindex}->{IPS}->{IP}}, $suffix;
     }
 
+    # Try IP-MIB when no IP was found
+    unless (first { $_->{IP} } values(%{$ports})) {
+        my $ipAddressIfIndex = $device->walk('.1.3.6.1.2.1.4.34.1.3');
+        if ($ipAddressIfIndex) {
+            my $ipAddressType = $device->walk('.1.3.6.1.2.1.4.34.1.4');
+            foreach my $key (sort grep { $ipAddressType->{$_} && $ipAddressType->{$_} == 1 } keys(%{$ipAddressType})) {
+                my $port = first { defined($_->{IFNUMBER}) && $_->{IFNUMBER} == $ipAddressIfIndex->{$key} } values(%{$ports})
+                    or next;
+                my ($type, $len, @data) = split(/[.]/, $key);
+                next unless $type && $len && (($type == 1 && $len == 4) || ($type == 2 && $len == 16));
+                if ($type == 1) {
+                    my $ipv4 = join(".", @data);
+                    $port->{IP} = $ipv4 unless $port->{IP} && $port->{IP} =~ /^(?:\d+)(?:\.\d+){3}$/;
+                    push @{$port->{IPS}->{IP}}, $ipv4;
+                } else { # type 2
+                    @data = map { sprintf("%x", $data[$_*2]*256+$data[$_*2+1]) } 0..7;
+                    my $ipv6 = join(":", map { $_ || "" } @data);
+                    $ipv6 =~ s/::+/::/g;
+                    # Keep IPv4 as interface ip if set
+                    $port->{IP} = $ipv6 unless $port->{IP};
+                    push @{$port->{IPS}->{IP}}, $ipv6;
+                }
+            }
+        }
+    }
+
     $device->{PORTS}->{PORT} = $ports;
 }
 
 sub _setPrinterProperties {
     my (%params) = @_;
 
-    my $device = $params{device};
-    my $snmp   = $params{snmp};
+    my $device = $params{device}
+        or return;
     my $logger = $params{logger};
 
     # colors
-    my $colors = $snmp->walk('.1.3.6.1.2.1.43.12.1.1.4.1');
+    my $colors = $device->walk('.1.3.6.1.2.1.43.12.1.1.4.1');
 
     # consumable levels
-    my $color_ids      = $snmp->walk('.1.3.6.1.2.1.43.11.1.1.3.1');
-    my $type_ids       = $snmp->walk('.1.3.6.1.2.1.43.11.1.1.5.1');
-    my $descriptions   = $snmp->walk('.1.3.6.1.2.1.43.11.1.1.6.1');
-    my $unit_ids       = $snmp->walk('.1.3.6.1.2.1.43.11.1.1.7.1');
-    my $max_levels     = $snmp->walk('.1.3.6.1.2.1.43.11.1.1.8.1');
-    my $current_levels = $snmp->walk('.1.3.6.1.2.1.43.11.1.1.9.1');
+    my $color_ids      = $device->walk('.1.3.6.1.2.1.43.11.1.1.3.1');
+    my $type_ids       = $device->walk('.1.3.6.1.2.1.43.11.1.1.5.1');
+    my $descriptions   = $device->walk('.1.3.6.1.2.1.43.11.1.1.6.1');
+    my $unit_ids       = $device->walk('.1.3.6.1.2.1.43.11.1.1.7.1');
+    my $max_levels     = $device->walk('.1.3.6.1.2.1.43.11.1.1.8.1');
+    my $current_levels = $device->walk('.1.3.6.1.2.1.43.11.1.1.9.1');
 
     foreach my $consumable_id (sort keys %$descriptions) {
         my $max         = $max_levels->{$consumable_id};
@@ -673,7 +683,7 @@ sub _setPrinterProperties {
         my $color_id = $color_ids->{$consumable_id};
 
         my $type;
-        if ($type_id != 1) {
+        if (defined($type_id) && $type_id =~ /^\d+$/ && int($type_id) != 1 && $consumable_types{$type_id}) {
             $type = $consumable_types{$type_id};
         } else {
             # fallback on description
@@ -688,7 +698,7 @@ sub _setPrinterProperties {
         if (!$type) {
             $logger->debug("unknown consumable type $type_id: " .
                 (getCanonicalString($descriptions->{$consumable_id}) || "no description")
-            ) if $logger;
+            ) if $logger && defined($type_id);
             next;
         }
 
@@ -768,12 +778,12 @@ sub _setPrinterProperties {
         my $value;
         if (ref $variable->{oid} eq 'ARRAY') {
             foreach my $oid (@{$variable->{oid}}) {
-                $value = $snmp->get($oid);
+                $value = $device->get($oid);
                 last if defined($value) && isInteger($value);
             }
         } else {
             my $oid = $variable->{oid};
-            $value = $snmp->get($oid);
+            $value = $device->get($oid);
         }
         next unless defined $value;
         if (!isInteger($value)) {
@@ -787,44 +797,42 @@ sub _setPrinterProperties {
 sub _setNetworkingProperties {
     my (%params) = @_;
 
-    my $device = $params{device};
-    my $snmp   = $params{snmp};
+    my $device = $params{device}
+        or return;
     my $logger = $params{logger};
 
-    my $ports    = $device->{PORTS}->{PORT};
+    my $ports  = $device->{PORTS}->{PORT};
 
     _setVlans(
-        snmp   => $snmp,
+        device => $device,
         ports  => $ports,
         logger => $logger
     );
 
     _setTrunkPorts(
-        snmp   => $snmp,
+        device => $device,
         ports  => $ports,
         logger => $logger
     );
 
     _setConnectedDevices(
-        snmp   => $snmp,
+        device => $device,
         ports  => $ports,
         logger => $logger,
         vendor => $device->{INFO}->{MANUFACTURER}
     );
 
     _setKnownMacAddresses(
-        snmp         => $snmp,
-        ports        => $ports,
-        logger       => $logger,
+        device => $device,
+        ports  => $ports,
+        logger => $logger,
     );
 
     _setAggregatePorts(
-        snmp   => $snmp,
+        device => $device,
         ports  => $ports,
         logger => $logger
     );
-
-    $device->setComponents();
 }
 
 sub _getPercentValue {
@@ -856,14 +864,17 @@ sub _getElements {
 sub _setKnownMacAddresses {
     my (%params) = @_;
 
-    my $snmp   = $params{snmp};
+    my $device = $params{device}
+        or return;
     my $ports  = $params{ports};
     my $logger = $params{logger};
 
     # start with mac addresses seen on default VLAN
     my $addresses = _getKnownMacAddresses(
-        snmp           => $snmp,
+        device         => $device,
+        macaddresses   => '.1.3.6.1.2.1.17.4.3.1.1', # dot1dTpFdbAddress
         address2port   => '.1.3.6.1.2.1.17.4.3.1.2', # dot1dTpFdbPort
+        macstatus      => '.1.3.6.1.2.1.17.4.3.1.3', # dot1dTpFdbStatus
         port2interface => '.1.3.6.1.2.1.17.1.4.1.2', # dot1dBasePortIfIndex
     );
 
@@ -877,8 +888,10 @@ sub _setKnownMacAddresses {
 
     # add additional mac addresses for other VLANs
     $addresses = _getKnownMacAddresses(
-        snmp           => $snmp,
+        device         => $device,
+        macaddresses   => '.1.3.6.1.2.1.17.7.1.2.2.1.1', # dot1qTpFdbAddress
         address2port   => '.1.3.6.1.2.1.17.7.1.2.2.1.2', # dot1qTpFdbPort
+        macstatus      => '.1.3.6.1.2.1.17.7.1.2.2.1.3', # dot1qTpFdbStatus
         port2interface => '.1.3.6.1.2.1.17.1.4.1.2',     # dot1dBasePortIfIndex
     );
 
@@ -909,22 +922,24 @@ sub _setKnownMacAddresses {
         my @mac_addresses = ();
         foreach my $vlan (@vlans) {
             $logger->debug("switching SNMP context to vlan $vlan") if $logger;
-            $snmp->switch_vlan_context($vlan);
+            $device->switch_vlan_context($vlan);
             my $mac_addresses = _getKnownMacAddresses(
-                snmp           => $snmp,
+                device         => $device,
+                macaddresses   => '.1.3.6.1.2.1.17.4.3.1.1', # dot1dTpFdbAddress
                 address2port   => '.1.3.6.1.2.1.17.4.3.1.2', # dot1dTpFdbPort
+                macstatus      => '.1.3.6.1.2.1.17.4.3.1.3', # dot1dTpFdbStatus
                 port2interface => '.1.3.6.1.2.1.17.1.4.1.2', # dot1dBasePortIfIndex
             );
             next unless $mac_addresses;
 
             push @mac_addresses, $mac_addresses;
         }
-        $snmp->reset_original_context() if @vlans;
+        $device->reset_original_context() if @vlans;
 
         # Try deprecated OIDs if no additional mac addresse was found on vlans
         unless (@mac_addresses) {
             my $addresses = _getKnownMacAddressesDeprecatedOids(
-                snmp              => $snmp,
+                device         => $device,
                 address2mac       => '.1.3.6.1.2.1.4.22.1.2', # ipNetToMediaPhysAddress
                 address2interface => '.1.3.6.1.2.1.4.22.1.1' # ipNetToMediaIfIndex
             );
@@ -991,30 +1006,45 @@ sub _addKnownMacAddresses {
 sub _getKnownMacAddresses {
     my (%params) = @_;
 
-    my $snmp   = $params{snmp};
+    my $device = $params{device}
+        or return;
 
     my $results;
-    my $address2port   = $snmp->walk($params{address2port});
-    my $port2interface = $snmp->walk($params{port2interface});
+    my $macaddresses   = $params{macaddresses} ? $device->walk($params{macaddresses}) : {};
+    my $address2port   = $device->walk($params{address2port});
+    my $port2interface = $device->walk($params{port2interface});
+    my $macstatus      = $params{macstatus} ? $device->walk($params{macstatus}) : {};
 
-    # dot1dTpFdbPort values matches the following scheme:
+    # dot1dTpFdbAddress is the known mac addresses table
+    # dot1dTpFdbStatus is the mac addresses status table, only learned(3) ones should be kept
+
+    # dot1dTpFdbPort values may match one of the following scheme:
     # $prefix.a.b.c.d.e.f = $port
-
-    # dot1qTpFdbPort values matches the following scheme:
     # $prefix.$vlan.a.b.c.d.e.f = $port
 
     # in both case, the last 6 elements of the OID constitutes
     # the mac address in decimal format
+
     foreach my $suffix (sort keys %{$address2port}) {
         my $port_id      = $address2port->{$suffix};
         my $interface_id = $port2interface->{$port_id};
         next unless defined $interface_id;
 
-        my @bytes = split(/\./, $suffix);
-        shift @bytes while @bytes > 6;
-
-        push @{$results->{$interface_id}},
-            sprintf "%02x:%02x:%02x:%02x:%02x:%02x", @bytes;
+        if ($macaddresses && $macaddresses->{$suffix}) {
+            my $mac = getCanonicalMacAddress($macaddresses->{$suffix});
+            next unless $mac;
+            # Assume mac status is learned(3) if not found
+            my $status = $macstatus && defined($macstatus->{$suffix}) && $macstatus->{$suffix} =~ /(\d+)/ ? int($1) : 3;
+            # Accepted status could be 3 for "learned" and 5 for "mgmt" (mac also setup as static in the device)
+            next unless $status == 3 || $status == 5;
+            push @{$results->{$interface_id}}, $mac;
+        } else {
+            my @bytes = split(/\./, $suffix);
+            shift @bytes while @bytes > 6;
+            next unless @bytes == 6;
+            push @{$results->{$interface_id}},
+                sprintf "%02x:%02x:%02x:%02x:%02x:%02x", @bytes;
+        }
     }
 
     return $results;
@@ -1023,11 +1053,12 @@ sub _getKnownMacAddresses {
 sub _getKnownMacAddressesDeprecatedOids {
     my (%params) = @_;
 
-    my $snmp   = $params{snmp};
+    my $device = $params{device}
+        or return;
 
     my $results;
-    my $address2mac   = $snmp->walk($params{address2mac});
-    my $address2interface = $snmp->walk($params{address2interface});
+    my $address2mac = $device->walk($params{address2mac});
+    my $address2interface = $device->walk($params{address2interface});
 
     foreach my $suffix (sort keys %{$address2mac}) {
         my $interface_id = $address2interface->{$suffix};
@@ -1177,25 +1208,90 @@ sub _sortChassisIdSuffix {
         ) || $a[0] <=> $b[0];
 }
 
+sub _normalized_connection {
+    my ($conn) = @_;
+
+    # Remove digit suffix on remote Juniper IFDESCR
+    if ($conn->{SYSDESCR} && $conn->{SYSDESCR} =~ /^Juniper/) {
+        $conn->{IFDESCR} =~ s/\.\d+$//
+            if $conn->{IFDESCR} && $conn->{IFDESCR} =~ m{\d/\d+/\d+\.\d+$};
+    }
+
+    return $conn;
+}
+
 sub _getLLDPInfo {
     my (%params) = @_;
 
-    my $snmp   = $params{snmp};
+    my $device = $params{device}
+        or return;
     my $logger = $params{logger};
 
     my $results;
-    my $ChassisIdSubType = $snmp->walk('.1.0.8802.1.1.2.1.4.1.1.4');
-    my $lldpRemChassisId = $snmp->walk('.1.0.8802.1.1.2.1.4.1.1.5');
-    my $lldpRemPortIdSubtype = $snmp->walk('.1.0.8802.1.1.2.1.4.1.1.6');
-    my $lldpRemPortId    = $snmp->walk('.1.0.8802.1.1.2.1.4.1.1.7');
-    my $lldpRemPortDesc  = $snmp->walk('.1.0.8802.1.1.2.1.4.1.1.8');
-    my $lldpRemSysName   = $snmp->walk('.1.0.8802.1.1.2.1.4.1.1.9');
-    my $lldpRemSysDesc   = $snmp->walk('.1.0.8802.1.1.2.1.4.1.1.10');
+    my $lldpLocPortIdType    = $device->walk('.1.0.8802.1.1.2.1.3.7.1.2');
+    my $lldpLocPortId        = $device->walk('.1.0.8802.1.1.2.1.3.7.1.3');
+    my $lldpLocPortDesc      = $device->walk('.1.0.8802.1.1.2.1.3.7.1.4');
+    my $ChassisIdSubType     = $device->walk('.1.0.8802.1.1.2.1.4.1.1.4');
+    my $lldpRemChassisId     = $device->walk('.1.0.8802.1.1.2.1.4.1.1.5');
+    my $lldpRemPortIdSubtype = $device->walk('.1.0.8802.1.1.2.1.4.1.1.6');
+    my $lldpRemPortId        = $device->walk('.1.0.8802.1.1.2.1.4.1.1.7');
+    my $lldpRemPortDesc      = $device->walk('.1.0.8802.1.1.2.1.4.1.1.8');
+    my $lldpRemSysName       = $device->walk('.1.0.8802.1.1.2.1.4.1.1.9');
+    my $lldpRemSysDesc       = $device->walk('.1.0.8802.1.1.2.1.4.1.1.10');
 
     # port to interface mapping
     my $port2interface =
-        $snmp->walk('.1.3.6.1.4.1.9.5.1.4.1.1.11.1') || # Cisco portIfIndex
-        $snmp->walk('.1.3.6.1.2.1.17.1.4.1.2');         # dot1dBasePortIfIndex
+        $device->walk('.1.3.6.1.4.1.9.5.1.4.1.1.11.1') || # Cisco portIfIndex
+        $device->walk('.1.3.6.1.2.1.17.1.4.1.2');         # dot1dBasePortIfIndex
+
+    # Update/fix port to interface mapping
+    if ($lldpLocPortIdType && $lldpLocPortId && $lldpLocPortDesc && $params{ports}) {
+        my %portId;
+        my %portDesc;
+        my %ignore;
+        # Firstly index know ports IFNAME and MAC as portid and IFDESCR as port description
+        # Always ignore duplicated values
+        foreach my $port (keys(%{$params{ports}})) {
+            next if empty($params{ports}->{$port}->{IFNAME});
+            my $name = $params{ports}->{$port}->{IFNAME};
+            $portId{$name} = $port;
+            unless (empty($params{ports}->{$port}->{MAC})) {
+                my $mac = getCanonicalMacAddress($params{ports}->{$port}->{MAC});
+                if ($mac) {
+                    if (defined($portId{$mac})) {
+                        delete $portId{$mac};
+                        $ignore{$mac} = 1;
+                    }
+                    $portId{$mac} = $port unless $ignore{$mac};
+                }
+            }
+            unless (empty($params{ports}->{$port}->{IFDESCR})) {
+                my $descr = $params{ports}->{$port}->{IFDESCR};
+                if (defined($portDesc{$descr})) {
+                    delete $portDesc{$descr};
+                    $ignore{$descr} = 1;
+                }
+                $portDesc{$descr} = $port unless $ignore{$descr};
+            }
+        }
+        # Then update port2interface with expected interface
+        foreach my $port (keys(%{$lldpLocPortIdType})) {
+            my $type = $lldpLocPortIdType->{$port};
+            my $portid = $type == 3 ? getCanonicalMacAddress($lldpLocPortId->{$port})
+                : getCanonicalString($lldpLocPortId->{$port});
+            # First try to match on portid
+            if ($portid && $portId{$portid}) {
+                $port2interface->{$port} = $portId{$portid};
+                next;
+            }
+            # Fallback on IFDESCR matching
+            my $descr = getCanonicalString($lldpLocPortDesc->{$port});
+            if ($descr && $portDesc{$descr}) {
+                $port2interface->{$port} = $portDesc{$descr};
+                next;
+            }
+        }
+    }
 
     # each lldp variable matches the following scheme:
     # $prefix.x.y.z = $value
@@ -1299,7 +1395,8 @@ sub _getLLDPInfo {
             $params{vendor} eq 'Juniper'    ? $id                   :
                                               $port2interface->{$id};
 
-        $results->{$interface_id} = $connection;
+        # Normalization related to manufacturers
+        $results->{$interface_id} = _normalized_connection($connection);
     }
 
     return $results;
@@ -1308,16 +1405,17 @@ sub _getLLDPInfo {
 sub _getCDPInfo {
     my (%params) = @_;
 
-    my $snmp   = $params{snmp};
+    my $device = $params{device}
+        or return;
     my $logger = $params{logger};
 
     my ($results, $blacklist);
-    my $cdpCacheAddress    = $snmp->walk('.1.3.6.1.4.1.9.9.23.1.2.1.1.4');
-    my $cdpCacheVersion    = $snmp->walk('.1.3.6.1.4.1.9.9.23.1.2.1.1.5');
-    my $cdpCacheDeviceId   = $snmp->walk('.1.3.6.1.4.1.9.9.23.1.2.1.1.6');
-    my $cdpCacheDevicePort = $snmp->walk('.1.3.6.1.4.1.9.9.23.1.2.1.1.7');
-    my $cdpCachePlatform   = $snmp->walk('.1.3.6.1.4.1.9.9.23.1.2.1.1.8');
-    my $cdpCacheSysName    = $snmp->walk('.1.3.6.1.4.1.9.9.23.1.2.1.1.17');
+    my $cdpCacheAddress    = $device->walk('.1.3.6.1.4.1.9.9.23.1.2.1.1.4');
+    my $cdpCacheVersion    = $device->walk('.1.3.6.1.4.1.9.9.23.1.2.1.1.5');
+    my $cdpCacheDeviceId   = $device->walk('.1.3.6.1.4.1.9.9.23.1.2.1.1.6');
+    my $cdpCacheDevicePort = $device->walk('.1.3.6.1.4.1.9.9.23.1.2.1.1.7');
+    my $cdpCachePlatform   = $device->walk('.1.3.6.1.4.1.9.9.23.1.2.1.1.8');
+    my $cdpCacheSysName    = $device->walk('.1.3.6.1.4.1.9.9.23.1.2.1.1.17');
 
     # each cdp variable matches the following scheme:
     # $prefix.x.y = $value
@@ -1401,13 +1499,14 @@ sub _getCDPInfo {
 sub _getEDPInfo {
     my (%params) = @_;
 
-    my $snmp   = $params{snmp};
+    my $device = $params{device}
+        or return;
     my $logger = $params{logger};
 
     my ($results, $blacklist);
-    my $edpNeighborVlanIpAddress = $snmp->walk('.1.3.6.1.4.1.1916.1.13.3.1.3');
-    my $edpNeighborName          = $snmp->walk('.1.3.6.1.4.1.1916.1.13.2.1.3');
-    my $edpNeighborPort          = $snmp->walk('.1.3.6.1.4.1.1916.1.13.2.1.6');
+    my $edpNeighborVlanIpAddress = $device->walk('.1.3.6.1.4.1.1916.1.13.3.1.3');
+    my $edpNeighborName          = $device->walk('.1.3.6.1.4.1.1916.1.13.2.1.3');
+    my $edpNeighborPort          = $device->walk('.1.3.6.1.4.1.1916.1.13.2.1.6');
 
     # each entry from extremeEdpTable matches the following scheme:
     # $prefix.x.0.0.y1.y2.y3.y4.y5.y6 = $value
@@ -1457,21 +1556,36 @@ sub _setVlans {
     my (%params) = @_;
 
     my $vlans = _getVlans(
-        snmp  => $params{snmp},
-        ports => $params{ports}
+        device => $params{device},
+        ports  => $params{ports}
     );
     return unless $vlans;
 
     my $ports  = $params{ports};
     my $logger = $params{logger};
+    my $device = $params{device}
+        or return;
+
+    # port to interface mapping
+    my $port2interface = $device->walk('.1.3.6.1.2.1.17.1.4.1.2'); # dot1dBasePortIfIndex
 
     foreach my $port_id (keys %$vlans) {
         # safety check
         if (! exists $ports->{$port_id}) {
-            $logger->debug(
-                "invalid interface ID $port_id while setting vlans, skipping"
-            ) if $logger;
-            next;
+            # Handle case where port_id is indeed an index from LLDP vlan datas like Extreme Networks devices
+            if ($port2interface && $port2interface->{$port_id} && $ports->{$port2interface->{$port_id}}) {
+                $vlans->{$port2interface->{$port_id}} = delete $vlans->{$port_id};
+                $port_id = $port2interface->{$port_id};
+            } elsif (isInteger($port_id) && $port2interface && $port2interface->{$port_id-1} && $ports->{$port2interface->{$port_id-1}+1}) {
+                # Last port is often management port and may miss in $port2interface but are following the last known one
+                $vlans->{$port2interface->{$port_id-1}+1} = delete $vlans->{$port_id};
+                $port_id = $port2interface->{$port_id-1}+1;
+            } else {
+                $logger->debug(
+                    "invalid interface ID $port_id while setting vlans, skipping"
+                ) if $logger;
+                next;
+            }
         }
         $ports->{$port_id}->{VLANS}->{VLAN} = $vlans->{$port_id};
     }
@@ -1480,12 +1594,13 @@ sub _setVlans {
 sub _getVlans {
     my (%params) = @_;
 
-    my $snmp = $params{snmp};
-    my $ports = $params{ports};
+    my $device = $params{device}
+        or return;
+    my $ports  = $params{ports};
 
     my $results;
-    my $vtpVlanName  = $snmp->walk('.1.3.6.1.4.1.9.9.46.1.3.1.1.4.1');
-    my $vmPortStatus = $snmp->walk('.1.3.6.1.4.1.9.9.68.1.2.2.1.2');
+    my $vtpVlanName  = $device->walk('.1.3.6.1.4.1.9.9.46.1.3.1.1.4.1');
+    my $vmPortStatus = $device->walk('.1.3.6.1.4.1.9.9.68.1.2.2.1.2');
 
     # each result matches either of the following schemes:
     # $prefix.$i.$j = $value, with $j as port id, and $value as vlan id
@@ -1505,14 +1620,14 @@ sub _getVlans {
     }
 
     # For Switch with dot1qVlanStaticEntry and dot1qVlanCurrent Present
-    my $dot1qVlanStaticName = $snmp->walk('.1.3.6.1.2.1.17.7.1.4.3.1.1');
-    my $dot1qVlanStaticEgressPorts = $snmp->walk('.1.3.6.1.2.1.17.7.1.4.3.1.2');
-    my $dot1qVlanStaticUntaggedPorts = $snmp->walk('.1.3.6.1.2.1.17.7.1.4.3.1.4');
-    my $dot1qVlanStaticRowStatus = $snmp->walk('.1.3.6.1.2.1.17.7.1.4.3.1.5');
+    my $dot1qVlanStaticName = $device->walk('.1.3.6.1.2.1.17.7.1.4.3.1.1');
+    my $dot1qVlanStaticEgressPorts = $device->walk('.1.3.6.1.2.1.17.7.1.4.3.1.2');
+    my $dot1qVlanStaticUntaggedPorts = $device->walk('.1.3.6.1.2.1.17.7.1.4.3.1.4');
+    my $dot1qVlanStaticRowStatus = $device->walk('.1.3.6.1.2.1.17.7.1.4.3.1.5');
     # each result matches either of the following schemes :
     # $prefix.$i    = $value with $i as vlan_id, and each bit of $value represent the Egress (or Untagged) is present (1st bit = ifnumber 1, 2nd bit => ifnumber 2, etc...)
-    my $dot1qVlanCurrentEgressPorts = $snmp->walk('.1.3.6.1.2.1.17.7.1.4.2.1.4');
-    my $dot1qVlanCurrentUntaggedPorts = $snmp->walk('.1.3.6.1.2.1.17.7.1.4.2.1.5');
+    my $dot1qVlanCurrentEgressPorts = $device->walk('.1.3.6.1.2.1.17.7.1.4.2.1.4');
+    my $dot1qVlanCurrentUntaggedPorts = $device->walk('.1.3.6.1.2.1.17.7.1.4.2.1.5');
 
     if ($dot1qVlanStaticName && $dot1qVlanStaticRowStatus) {
         foreach my $vlan_id (sort keys %{$dot1qVlanStaticRowStatus}) {
@@ -1575,8 +1690,8 @@ sub _getVlans {
     unless ($results) {
         # For other switches, we use another methods
         # used for Alcatel-Lucent and ExtremNetworks (and perhaps others)
-        my $vlanIdName = $snmp->walk('.1.0.8802.1.1.2.1.5.32962.1.2.3.1.2');
-        my $portLink = $snmp->walk('.1.0.8802.1.1.2.1.3.7.1.3');
+        my $vlanIdName = $device->walk('.1.0.8802.1.1.2.1.5.32962.1.2.3.1.2');
+        my $portLink = $device->walk('.1.0.8802.1.1.2.1.3.7.1.3');
         if ($vlanIdName && $portLink) {
             foreach my $suffix (sort keys %{$vlanIdName}) {
                 my ($port, $vlan) = split(/\./, $suffix);
@@ -1595,7 +1710,7 @@ sub _getVlans {
             }
         } else {
             # A last method
-            my $vlanId = $snmp->walk('.1.0.8802.1.1.2.1.5.32962.1.2.1.1.1');
+            my $vlanId = $device->walk('.1.0.8802.1.1.2.1.5.32962.1.2.1.1.1');
             if ($vlanId) {
                 foreach my $port (sort keys %{$vlanId}) {
                     push @{$results->{$port}}, {
@@ -1614,7 +1729,7 @@ sub _setTrunkPorts {
     my (%params) = @_;
 
     my $trunk_ports = _getTrunkPorts(
-        snmp  => $params{snmp},
+        device  => $params{device},
     );
     return unless $trunk_ports;
 
@@ -1637,7 +1752,8 @@ sub _setTrunkPorts {
 sub _getTrunkPorts {
     my (%params) = @_;
 
-    my $snmp   = $params{snmp};
+    my $device = $params{device}
+        or return;
 
     my $results;
 
@@ -1645,7 +1761,7 @@ sub _getTrunkPorts {
     # prefix.x = value
     # x is the interface id
     # value is 1 for trunk, 2 for access
-    my $vlanStatus = $snmp->walk('.1.3.6.1.4.1.9.9.46.1.6.1.1.14');
+    my $vlanStatus = $device->walk('.1.3.6.1.4.1.9.9.46.1.6.1.1.14');
     if ($vlanStatus) {
         while (my ($interface_id, $value) = each %{$vlanStatus}) {
             $results->{$interface_id} = $value == 1 ? 1 : 0;
@@ -1658,9 +1774,9 @@ sub _getTrunkPorts {
     # x is the vlan id
     # y is the port id
     # value is 1 for access, 2 for trunk
-    my $accessMode = $snmp->walk('.1.3.6.1.4.1.2636.3.40.1.5.1.7.1.5');
+    my $accessMode = $device->walk('.1.3.6.1.4.1.2636.3.40.1.5.1.7.1.5');
     if ($accessMode) {
-        my $port2interface = $snmp->walk('.1.3.6.1.2.1.17.1.4.1.2');
+        my $port2interface = $device->walk('.1.3.6.1.2.1.17.1.4.1.2');
         while (my ($suffix, $value) = each %{$accessMode}) {
             my $port_id = _getElement($suffix, -1);
             next unless defined($port_id);
@@ -1676,12 +1792,16 @@ sub _getTrunkPorts {
     # prefix.x = value
     # x is either an interface or a port id
     # value is the vlan id, 0 for trunk
-    my $vlanId = $snmp->walk('.1.0.8802.1.1.2.1.5.32962.1.2.1.1.1');
+    my $vlanId = $device->walk('.1.0.8802.1.1.2.1.5.32962.1.2.1.1.1');
     if ($vlanId) {
-        my $port2interface = $snmp->walk('.1.3.6.1.2.1.17.1.4.1.2');
+        my $port2interface = $device->walk('.1.3.6.1.2.1.17.1.4.1.2');
         while (my ($id, $value) = each %{$vlanId}) {
             my $interface_id =
-                ! exists $port2interface->{$id} ? $id                   :
+                ! exists $port2interface->{$id} ?
+                # Handle management port not always referenced in $port2interface
+                # with index following numerically the previous one
+                isInteger($id) && exists $port2interface->{$id-1} ?
+                    $port2interface->{$id-1}+1 :  $id                   :
                                                   $port2interface->{$id};
             $results->{$interface_id} = $value == 0 ? 1 : 0;
         }
@@ -1729,10 +1849,11 @@ sub _setAggregatePorts {
 sub _getLACPInfo {
     my (%params) = @_;
 
-    my $snmp = $params{snmp};
+    my $device = $params{device}
+        or return;
 
     my $results;
-    my $aggPortAttachedAggID = $snmp->walk('.1.2.840.10006.300.43.1.2.1.1.13');
+    my $aggPortAttachedAggID = $device->walk('.1.2.840.10006.300.43.1.2.1.1.13');
 
     foreach my $interface_id (sort keys %$aggPortAttachedAggID) {
         my $aggregator_id = $aggPortAttachedAggID->{$interface_id};
@@ -1747,10 +1868,11 @@ sub _getLACPInfo {
 sub _getPAGPInfo {
     my (%params) = @_;
 
-    my $snmp = $params{snmp};
+    my $device = $params{device}
+        or return;
 
     my $results;
-    my $pagpPorts = $snmp->walk('.1.3.6.1.4.1.9.9.98.1.1.1.1.5');
+    my $pagpPorts = $device->walk('.1.3.6.1.4.1.9.9.98.1.1.1.1.5');
 
     foreach my $port_id (sort keys %$pagpPorts) {
         my $portShortNum = $pagpPorts->{$port_id};

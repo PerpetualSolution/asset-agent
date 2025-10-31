@@ -50,10 +50,11 @@ sub run {
     if ($event && $event->maintenance && $event->name) {
         my $name = $event->name;
         my $targetid = $self->{target}->id;
-        $self->{logger}->debug("Inventory task $name  event for $targetid target");
+        $self->{logger}->debug("Inventory task $name event for $targetid target");
         my $remoteinv = GLPI::Agent::Inventory->new(
             statedir => $self->{target}->getStorage()->getDirectory(),
             logger   => $self->{logger},
+            itemtype => empty($self->{config}->{'itemtype'}) ? "Computer" : $self->{config}->{'itemtype'},
         );
         my $continue = $remoteinv->canCleanupOldRemoteStateFile();
         if ($continue) {

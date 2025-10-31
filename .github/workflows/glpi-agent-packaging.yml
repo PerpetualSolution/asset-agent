@@ -50,10 +50,8 @@ jobs:
       run: |
         if [ "${{ vars.WIN32_SIGNING }}" == "no" ]; then
             echo "win32-signing=no" >>$GITHUB_OUTPUT
-        elif [ -n "$CODESIGN_COMMAND" ]; then
-            echo "win32-signing=alt" >>$GITHUB_OUTPUT
-        elif [ -n "$CST_USERNAME" ]; then
-            echo "win32-signing=cst" >>$GITHUB_OUTPUT
+        elif [ -n "$CODESIGN_HOST" ]; then
+            echo "win32-signing=yes" >>$GITHUB_OUTPUT
         else
             echo "win32-signing=no" >>$GITHUB_OUTPUT
         fi
@@ -152,8 +150,7 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         PUBLISHING_TOKEN: ${{ secrets.PUBLISHING_TOKEN }}
-        CODESIGN_COMMAND: ${{ secrets.CODESIGN_COMMAND }}
-        CST_USERNAME: ${{ secrets.CST_USERNAME }}
+        CODESIGN_HOST: ${{ secrets.CODESIGN_HOST }}
         APPSIGNID: ${{ vars.MACOSX_APPSIGNID }}
         INSTSIGNID: ${{ vars.MACOSX_INSTSIGNID }}
     - name: Generate release description
@@ -204,7 +201,7 @@ jobs:
       id: built-ca-dll-cache
       with:
         path: contrib/windows/packaging/tools/ca/ca.dll
-        key: windows-packaging-ca-dll-cache-${{ matrix.arch }}-${{ hashFiles('contrib\windows\glpi-agent-extlibs-build.pl', 'contrib\windows\packaging\ToolchainBuildJob.pm', 'contrib\windows\packaging\CustomActionDllBuildJob.pm', 'contrib\windows\packaging\tools\ca\Makefile', 'contrib\windows\packaging\tools\ca\dll\*') }}
+        key: windows-packaging-ca-dll-cache-${{ matrix.arch }}-${{ hashFiles('contrib\windows\glpi-agent-extlibs-build.pl', 'contrib\windows\packaging\ToolchainBuildJob.pm', 'contrib\windows\packaging\CustomCodeSigning.pm', 'contrib\windows\packaging\CustomActionDllBuildJob.pm', 'contrib\windows\packaging\tools\ca\Makefile', 'contrib\windows\packaging\tools\ca\dll\*') }}
     - name: Restore Toolchain points cache
       uses: actions/cache@v4
       id: built-extlibs-cache
@@ -213,7 +210,7 @@ jobs:
         path: |
             C:/Strawberry-perl-for-GLPI-Agent_build/download/winlibs*.zip
             C:/Strawberry-perl-for-GLPI-Agent_build/download/extlibs.zip
-        key: windows-packaging-extlibs-cache-${{ matrix.arch }}-${{ hashFiles('contrib\windows\glpi-agent-extlibs-build.pl', 'contrib\windows\packaging\ToolchainBuildJob.pm', 'contrib\windows\packaging\*.patch') }}
+        key: windows-packaging-extlibs-cache-${{ matrix.arch }}-${{ hashFiles('contrib\windows\glpi-agent-extlibs-build.pl', 'contrib\windows\packaging\ToolchainBuildJob.pm', 'contrib\windows\packaging\CustomCodeSigning.pm', 'contrib\windows\packaging\*.patch') }}
     - name: List files in cached paths
       if: success() || failure()
       run: |
@@ -256,48 +253,42 @@ jobs:
         cd C:\Strawberry\perl\site
         patch --binary -i perl-dist-strawberry.patch -p1
       shell: cmd
+    - name: Prepare for remote Code Signing
+      if: ${{ needs.setup-release.outputs.win32-signing == 'yes' }}
+      run: |
+        mkdir ~/.ssh
+        echo "$CODESIGN_KNOWNHOST"            > ~/.ssh/known_hosts
+        echo "$CODESIGN_PRIVATE"              > private.key
+        echo "Host codesign"                  > ~/.ssh/config
+        echo "    HostName $CODESIGN_HOST"    >>~/.ssh/config
+        echo "    Port $CODESIGN_PORT"        >>~/.ssh/config
+        echo "    User $CODESIGN_USER"        >>~/.ssh/config
+      shell: bash
+      env:
+        CODESIGN_KNOWNHOST: ${{ secrets.CODESIGN_KNOWNHOST }}
+        CODESIGN_PRIVATE: ${{ secrets.CODESIGN_PRIVATE }}
+        CODESIGN_HOST: ${{ secrets.CODESIGN_HOST }}
+        CODESIGN_USER: ${{ secrets.CODESIGN_USER }}
+        CODESIGN_PORT: ${{ secrets.CODESIGN_PORT }}
     - name: Build Extlibs with Perl Toolchain
       if: steps.built-perl-cache.outputs.cache-hit != 'true' && steps.built-extlibs-cache.outputs.cache-hit != 'true'
       run: |
-        perl contrib\windows\glpi-agent-extlibs-build.pl --arch ${{ matrix.arch }}
+        perl contrib\windows\glpi-agent-extlibs-build.pl --arch ${{ matrix.arch }} --code-signing=${{ vars.WIN32_SIGNING }}
       shell: cmd
     - name: Build ca.dll with Perl Toolchain
       if: steps.built-ca-dll-cache.outputs.cache-hit != 'true'
       run: |
-        perl contrib\windows\glpi-agent-extlibs-build.pl --arch ${{ matrix.arch }} --cadll
+        perl contrib\windows\glpi-agent-extlibs-build.pl --arch ${{ matrix.arch }} --cadll --code-signing=${{ vars.WIN32_SIGNING }}
       shell: cmd
     - name: Build package
       run: |
-        perl contrib\windows\glpi-agent-packaging.pl --arch ${{ matrix.arch }}
+        perl contrib\windows\glpi-agent-packaging.pl --arch ${{ matrix.arch }} --code-signing=${{ vars.WIN32_SIGNING }}
       shell: cmd
-    - name: MSI Signing (CST)
-      if: ${{ needs.setup-release.outputs.win32-signing == 'cst' }}
+    - name: Cleanup private key
+      if: ${{ ( success() || failure() ) && needs.setup-release.outputs.win32-signing == 'yes' }}
       run: |
-        perl tools\msi-signing.pl "C:\Strawberry-perl-for-GLPI-Agent_build" "GLPI-Agent-${{ needs.setup-release.outputs.version }}-${{ matrix.arch }}.msi"
+        del /F private.key
       shell: cmd
-      env:
-        CST_USERNAME: ${{ secrets.CST_USERNAME }}
-        CST_PASSWORD: ${{ secrets.CST_PASSWORD }}
-        CST_SECRET: ${{ secrets.CST_SECRET }}
-        CST_CREDENTIALID: ${{ secrets.CST_CREDENTIALID }}
-    - name: MSI Signing (ALT)
-      if: ${{ needs.setup-release.outputs.win32-signing == 'alt' }}
-      run: |
-        cd "C:\\Strawberry-perl-for-GLPI-Agent_build"
-        umask 0077
-        mkdir ~/.ssh
-        echo "$CODESIGN_KNOWNHOST"            > ~/.ssh/known_hosts
-        echo "$CODESIGN_PRIVATE"              > private.key
-        umask 0002
-        MSI="GLPI-Agent-${{ needs.setup-release.outputs.version }}-${{ matrix.arch }}.msi"
-        cat "output\\$MSI" | $CODESIGN_COMMAND codesign "$MSI" > "$MSI"
-        rm -f private.key ~/.ssh/known_hosts "output\\$MSI"
-        mv -vf "$MSI" "output\\$MSI"
-      shell: bash
-      env:
-        CODESIGN_KNOWNHOST: ${{ secrets.CODESIGN_KNOWNHOST }}
-        CODESIGN_COMMAND: ${{ secrets.CODESIGN_COMMAND }}
-        CODESIGN_PRIVATE: ${{ secrets.CODESIGN_PRIVATE }}
     - name: List generated files
       if: success() || failure()
       run: |
@@ -375,6 +366,10 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Image version
+      id: runner-info
+      run: echo "image-version=$ImageVersion" >>$GITHUB_OUTPUT
+      shell: bash
     - name: Restore points cache
       uses: actions/cache@v4
       with:
@@ -387,7 +382,7 @@ jobs:
           contrib/macosx/build/openssl*
           contrib/macosx/build/zlib*
           contrib/macosx/build/Applications
-        key: macosx-packaging-restore-points-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('contrib/macosx/glpi-agent-packaging.sh') }}
+        key: ${{ matrix.os }}-${{ matrix.arch }}-packaging-restore-points-${{ runner.os }}-${{ runner.arch }}-${{ steps.runner-info.outputs.image-version }}-${{ hashFiles('contrib/macosx/glpi-agent-packaging.sh') }}
     - name: Import Application Signing Cert
       id: application-signing-cert
       uses: slidoapp/import-codesign-certs@1923310662e8682dd05b76b612b53301f431cd5d
@@ -539,6 +534,7 @@ jobs:
           libtest-mockobject-perl libtext-template-perl                    \
           libsocket-getaddrinfo-perl libuniversal-require-perl liburi-perl \
           libwww-perl libxml-libxml-perl libyaml-perl                      \
+          libcrypt-des-perl libdigest-hmac-perl \
           libossp-uuid-perl libcpanel-json-xs-perl devscripts
       shell: bash
     - name: Build debian packages

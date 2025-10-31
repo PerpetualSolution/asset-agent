@@ -3,8 +3,8 @@
 # PERL: https://www.perl.org/get.html
 # SSL:  https://github.com/openssl/openssl/releases
 # ZLIB: https://www.zlib.net/
-: ${PERL_VERSION:=5.38.2}
-: ${OPENSSL_VERSION:=3.4.0}
+: ${PERL_VERSION:=5.42.0}
+: ${OPENSSL_VERSION:=3.5.4}
 : ${ZLIB_VERSION:=1.3.1}
 : ${ZLIB_SHA256:=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23}
 
@@ -85,6 +85,22 @@ case "$(uname -s) $ARCH" in
         exit 1
         ;;
 esac
+
+# Check notarization requirements
+if [ "$NOTARIZE" == "yes" ]; then
+    if [ -z "$NOTARIZE_USER" ]; then
+        echo "Can't planify notarization with empty NOTARIZE_USER" >&2
+        exit 4
+    fi
+    if [ -z "$NOTARIZE_PASSWORD" ]; then
+        echo "Can't planify notarization with empty NOTARIZE_PASSWORD" >&2
+        exit 5
+    fi
+    if [ -z "$NOTARIZE_TEAMID" ]; then
+        echo "Can't planify notarization with empty NOTARIZE_TEAMID" >&2
+        exit 6
+    fi
+fi
 
 export MACOSX_DEPLOYMENT_TARGET
 
@@ -185,7 +201,7 @@ build_perl () {
         rm -f config.sh Policy.sh
         ./Configure -de -Dprefix=$BUILD_PREFIX -Duserelocatableinc -DNDEBUG    \
             -Dman1dir=none -Dman3dir=none -Dusethreads -UDEBUGGING             \
-            -Dusemultiplicity -Duse64bitint -Duse64bitall -Darch=$ARCH         \
+            -Dusemultiplicity -Duse64bitint -Darch=$ARCH                       \
             -Aeval:privlib=.../../lib -Aeval:scriptdir=.../../bin              \
             -Aeval:vendorprefix=.../.. -Aeval:vendorlib=.../../agent           \
             -Accflags="$SDKFLAGS $EXTRA_PERL_CCFLAGS"                          \
@@ -463,7 +479,7 @@ fi
 	    </dict>
 BUILD_INFO
 fi
-if [ -n "$NOTARIZE_USER" -a -n "$NOTARIZE_PASSWORD" -a -n "$NOTARIZE_TEAMID" -a "$NOTARIZE" == "yes" ]; then
+if [ "$NOTARIZE" == "yes" ]; then
     cat >>pkg/build-info.plist <<-BUILD_INFO
 	    <key>notarization_info</key>
 	    <dict>
@@ -570,8 +586,28 @@ cat >pkg/payload/Applications/GLPI-Agent/Contents/Info.plist <<-INFO_PLIST
 	</plist>
 INFO_PLIST
 
+# Disable aborting on error to handle notarization failure
+[ "$NOTARIZE" == "yes" ] && set +e
+
 echo "Build package"
 ./munkipkg pkg
+
+# Analyze return code
+if [ "$?" != "0" ]; then
+    # If pkg file was generated, it means we failed on notarization
+    # Then we can forget notarization unless on release (nightly build case)
+    if [ -s "$PKG" -a "$NOTARIZE" == "yes" -a -z "${TAGNAME##nightly-*}" ]; then
+        echo "By-passing notarization check"
+        # On Github Actions run, add a warning to the build workflow
+        [ -n "$GITHUB_REF" ] && echo "::warning title=Notarization failure for MacOSX $PKG build::By-passing notarization check"
+        NOTARIZE="no"
+    else
+        exit 7
+    fi
+fi
+
+# Enable back shell aborting on error
+set -e
 
 mv -vf "pkg/build/$PKG" "build/$PKG"
 
@@ -579,7 +615,7 @@ mv -vf "pkg/build/$PKG" "build/$PKG"
 [ -n "$INSTSIGNID" ] && pkgutil --check-signature "build/$PKG"
 
 # Notarization check
-[ -n "$NOTARIZE_USER" -a -n "$NOTARIZE_PASSWORD" -a -n "$NOTARIZE_TEAMID" -a "$NOTARIZE" == "yes" ] && xcrun stapler validate "build/$PKG"
+[ "$NOTARIZE" == "yes" ] && xcrun stapler validate "build/$PKG"
 
 rm -f "build/$DMG"
 echo "Create DMG"

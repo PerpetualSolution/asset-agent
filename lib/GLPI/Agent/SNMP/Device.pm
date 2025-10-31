@@ -3,6 +3,8 @@ package GLPI::Agent::SNMP::Device;
 use strict;
 use warnings;
 
+use parent 'GLPI::Agent::SNMP';
+
 use GLPI::Agent::Tools;
 use GLPI::Agent::Tools::SNMP;
 use GLPI::Agent::Tools::Network;
@@ -78,6 +80,7 @@ sub new {
     my $self = {
         snmp   => $snmp,
         glpi   => $params{glpi} // '', # glpi server version if we need to check feature support
+        nowalk => 0, # Can be set to disable walk API for devices not supporting it like Snom phones
         logger => $logger
     };
 
@@ -97,9 +100,32 @@ sub get {
 sub walk {
     my ($self, $oid) = @_;
 
+    return if $self->{nowalk};
+
     return unless $self->{snmp} && $oid;
 
     return $self->{snmp}->walk($oid);
+}
+
+sub disableWalk {
+    my ($self) = @_;
+    $self->{nowalk} = 1;
+}
+
+sub switch_vlan_context {
+    my ($self, $vlan_id) = @_;
+
+    return unless $self->{snmp} && !empty($vlan_id);
+
+    return $self->{snmp}->switch_vlan_context($vlan_id);
+}
+
+sub reset_original_context {
+    my ($self) = @_;
+
+    return unless $self->{snmp};
+
+    return $self->{snmp}->reset_original_context();
 }
 
 sub loadMibSupport {
@@ -256,11 +282,11 @@ sub setSerial {
 
     my $serial =
         # First try MIB Support mechanism
-        $self->getSerialByMibSupport()                         ||
+        $self->getSerialByMibSupport()                 ||
         # Entity-MIB::entPhysicalSerialNum
-        $self->{snmp}->get_first('.1.3.6.1.2.1.47.1.1.1.1.11') ||
+        $self->get_first('.1.3.6.1.2.1.47.1.1.1.1.11') ||
         # Printer-MIB::prtGeneralSerialNumber
-        $self->{snmp}->get_first('.1.3.6.1.2.1.43.5.1.1.17');
+        $self->get_first('.1.3.6.1.2.1.43.5.1.1.17');
 
     if ( not defined $serial ) {
         # vendor specific OIDs
@@ -300,11 +326,11 @@ sub setFirmware {
 
     my $firmware =
         # First try to get firmware from MIB Support mechanism
-        $self->getFirmwareByMibSupport()                       ||
+        $self->getFirmwareByMibSupport()               ||
         # entPhysicalSoftwareRev
-        $self->{snmp}->get_first('.1.3.6.1.2.1.47.1.1.1.1.10') ||
+        $self->get_first('.1.3.6.1.2.1.47.1.1.1.1.10') ||
         # entPhysicalFirmwareRev
-        $self->{snmp}->get_first('.1.3.6.1.2.1.47.1.1.1.1.9');
+        $self->get_first('.1.3.6.1.2.1.47.1.1.1.1.9');
 
     if ( not defined $firmware ) {
         # vendor specific OIDs
@@ -343,10 +369,10 @@ sub setMacAddress {
 
     my $address_oid = ".1.3.6.1.2.1.17.1.1.0";
     my $address = getCanonicalMacAddress(
-        # use BRIDGE-MIB::dot1dBaseBridgeAddress if available
-        $self->get($address_oid) ||
         # Try MIB Support mechanism
-        $self->getMacAddressByMibSupport()
+        $self->getMacAddressByMibSupport() ||
+        # use BRIDGE-MIB::dot1dBaseBridgeAddress if available
+        $self->get($address_oid)
     );
 
     return $self->{MAC} = $address
@@ -428,7 +454,7 @@ sub setModel {
             $self->get('.1.3.6.1.2.1.25.3.2.1.3.1')    :
             exists $self->{TYPE} && $self->{TYPE} eq 'POWER' ?
             $self->get('.1.3.6.1.2.1.33.1.1.5.0')      : # UPS-MIB
-            $self->{snmp}->get_first('.1.3.6.1.2.1.47.1.1.1.1.13');
+            $self->get_first('.1.3.6.1.2.1.47.1.1.1.1.13');
         $self->{MODEL} = getCanonicalString($model) if $model;
     }
 
@@ -567,6 +593,33 @@ sub setIp {
     return $self->{IPS}->{IP} = [
         sort values %{$results}
     ] if $results;
+
+    # IP-MIB
+    my $ipAddressIfIndex = $self->walk('.1.3.6.1.2.1.4.34.1.3');
+    if ($ipAddressIfIndex) {
+        my $ipAddressType = $self->walk('.1.3.6.1.2.1.4.34.1.4');
+        my @keys = grep { $ipAddressType->{$_} && $ipAddressType->{$_} == 1 } keys(%{$ipAddressType});
+        my @ips;
+        if (@keys) {
+            foreach my $key (@keys) {
+                my ($type, $len, @data) = split(/[.]/, $key);
+                next unless $type && $len && (($type == 1 && $len == 4) || ($type == 2 && $len == 16));
+                if ($type == 1) {
+                    # skip localhost ips
+                    next if $data[0] == 127;
+                    push @ips, join(".", @data);
+                } else { # type 2
+                    # skip localhost ips
+                    next if $data[0] == 0;
+                    @data = map { sprintf("%x", $data[$_*2]*256+$data[$_*2+1]) } 0..7;
+                    my $ipv6 = join(":", map { $_ || "" } @data);
+                    $ipv6 =~ s/::+/::/g;
+                    push @ips, $ipv6;
+                }
+            }
+            return $self->{IPS}->{IP} = [ sort @ips ] if @ips;
+        }
+    }
 
     my $ip = $self->getIpByMibSupport();
     $self->{IPS}->{IP} = [ $ip ] if $ip;

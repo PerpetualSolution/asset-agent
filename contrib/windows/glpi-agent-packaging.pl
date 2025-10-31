@@ -15,13 +15,15 @@ use constant {
 };
 
 use lib abs_path(File::Spec->rel2abs('../packaging', __FILE__));
+
+use CustomCodeSigning;
 use PerlBuildJob;
 
 use lib 'lib';
 use GLPI::Agent::Version;
 
 # HACK: make "use Perl::Dist::GLPI::Agent::Step::XXX" works as included plugin
-map { $INC{"Perl/Dist/GLPI/Agent/Step/$_.pm"} = __FILE__ } qw(Update OutputMSI Test ToolChain InstallPerlCore InstallModules);
+map { $INC{"Perl/Dist/GLPI/Agent/Step/$_.pm"} = __FILE__ } qw(Update OutputMSI Test ToolChain InstallPerlCore InstallModules Github);
 
 # Perl::Dist::Strawberry doesn't detect WiX 3.11 which is installed on windows github images
 # Algorithm imported from Perl::Dist::Strawberry::Step::OutputMSM_MSI::_detect_wix_dir
@@ -75,7 +77,7 @@ if ($ENV{GITHUB_REF} && $ENV{GITHUB_REF} =~ m|refs/tags/(.+)$|) {
 }
 
 sub build_app {
-    my ($arch, $notest) = @_;
+    my ($arch, $notest, $sign) = @_;
 
     my $package_rev = $ENV{PACKAGE_REVISION} || PACKAGE_REVISION;
 
@@ -98,6 +100,7 @@ sub build_app {
         arch            => $arch,
         _dllsuffix      => $arch eq "x86" ? '_' : '__',
         _restore_step   => PERL_BUILD_STEPS,
+        codesigning     => $sign,
     );
 
     $app->parse_options(
@@ -115,6 +118,7 @@ sub build_app {
 
 my %do = ();
 my $notest = 0;
+my $sign   = 0;
 while ( @ARGV ) {
     my $arg = shift @ARGV;
     if ($arg eq "--arch") {
@@ -125,6 +129,10 @@ while ( @ARGV ) {
         %do = ( x86 => 32, x64 => 64);
     } elsif ($arg eq "--no-test") {
         $notest = 1;
+    } elsif ($arg =~ /^--code-signing=(.*)$/) {
+        $sign = 1 if $1 =~ /^yes|1$/i;
+    } else {
+        warn "Unsupported option: $arg\n";
     }
 }
 
@@ -136,7 +144,7 @@ die "32 bits packaging build no more supported\n"
 
 foreach my $arch (sort keys(%do)) {
     print "Building $arch packages...\n";
-    my $app = build_app($arch, $notest);
+    my $app = build_app($arch, $notest, $sign);
     $app->do_job();
     # global_dump_FINAL.txt must exist in debug_dir if all steps have been passed
     exit(1) unless -e catfile($app->global->{debug_dir}, 'global_dump_FINAL.txt');
@@ -185,13 +193,82 @@ use Text::Patch;
 use File::Copy qw(copy);
 use File::Slurp;
 use Text::Diff;
+use File::Spec;
+
+sub _update_config_gc {
+    my ($self, $fname, $update_hash) = @_;
+
+    die "update hash arg is not a hash ref"
+      if not ref($update_hash) =~ /HASH/;
+
+    open my $fh, $fname or die "Unable to open $fname, $!";
+
+    my @lines = (<$fh>);
+    close $fh;
+
+    my %data;
+    my @output;
+    my @perl_lines; #  lines starting with PERL
+
+    while (defined(my $line = shift @lines)) {
+        $line =~ s/[\r\n]+$//;
+        if ($line =~ /^#/) {
+            #  headers stay as they are
+            push @output, $line;
+        }
+        elsif ($line =~ /^PERL/) {
+            push @perl_lines, $line;
+        }
+        elsif ($line =~ m/^([\w]+)=(.*)$/) {
+            $data{$1} = length($2) ? $2 : "''";
+        }
+    }
+
+    my $default_config_hash = $self->_get_default_config_hash;
+    @data{keys %$default_config_hash} = values %$default_config_hash;
+
+    # fix up quoting of values
+    foreach my $val (values %$update_hash) {
+        next if $val =~ /^'/;  # assumes symmetry, i.e. opening and closing
+        $val = "'$val'";
+    }
+
+    @data{keys %$update_hash} = values %$update_hash;
+
+    my (@ucfirst_lines, @lcfirst_lines);
+    foreach my $key (grep {/^[A-Z]/} keys %data) {
+        push @ucfirst_lines, "$key=$data{$key}";
+    }
+    foreach my $key (grep {/^[_a-z]/} keys %data) {
+        push @lcfirst_lines, "$key=$data{$key}";
+    }
+    push @output, (sort @ucfirst_lines), (sort @lcfirst_lines), @perl_lines;
+
+    # long name but otherwise we interfere with patch backups
+    rename $fname, "$fname.orig.before_hash_update" or die $!;
+    open my $ofh, ">:raw", $fname or die "Unable to open $fname to write to, $!";
+    map { print $ofh $_, "\n" } @output;
+    $ofh->close;
+}
+
+sub _patch_dir {
+    my ($self, $new, $dir) = @_;
+
+    $self->boss->message(5, "_patch_file: applying DIFF on dir '$dir'\n");
+    my $wd = $self->_push_dir($dir);
+    system("patch --binary -i \"$new\" -p1") == 0
+        or die "patch '$new' FAILED";
+}
 
 sub _patch_file {
     my ($self, $new, $dst, $dir, $tt_vars, $no_backup) = @_;
 
     # We only need to replace patch case
     return $self->SUPER::_patch_file($new, $dst, $dir, $tt_vars, $no_backup)
-        unless $new =~ /\.patch$/;
+        unless $new =~ /\.(diff|patch)$/;
+
+    return $self->_patch_dir(File::Spec->rel2abs($new), $dir)
+        if $dst =~ /\*$/;
 
     $self->boss->message(5, "_patch_file: applying patch on '$dst'\n");
     copy($dst, "$dst.backup") if !$no_backup && -f $dst && !-f "$dst.backup";
@@ -204,6 +281,33 @@ sub _patch_file {
     $self->_restore_ro($dst, $r);
 
     write_file("$dst.diff", diff("$dst.backup", $dst)) if -f "$dst.backup";
+}
+
+package
+    Perl::Dist::GLPI::Agent::Step::Github;
+
+use parent 'Perl::Dist::Strawberry::Step';
+
+sub run {
+    my ($self) = @_;
+
+    foreach my $s (@{$self->{config}->{downloads}}) {
+        $self->_download($s);
+        $self->boss->message(5, "downloaded='$s->{name}'");
+    }
+}
+
+sub _download {
+    my ($self, $src) = @_;
+    my $name    = $src->{name};
+    my $project = $src->{project};
+    my $release = $src->{release};
+    my $folder  = $self->boss->resolve_name($src->{folder});
+    my $url     = "https://github.com/$project/releases/download/$release/".$src->{file};
+
+    $self->boss->message(1, "installing $name $release from github $project\n");
+
+    $self->boss->mirror_url($url, $folder);
 }
 
 package
@@ -557,6 +661,9 @@ sub _tree2xml {
                 $result .= $ident ."  ". qq[    <RegistryValue Name="glpi-version" Type="string" Value="[GLPI_VERSION]" />\n];
                 $result .= $ident ."  ". qq[    <RegistryValue Name="no-task" Type="string" Value="[NO_TASK]" />\n];
                 $result .= $ident ."  ". qq[    <RegistryValue Name="no-category" Type="string" Value="[NO_CATEGORY]" />\n];
+                $result .= $ident ."  ". qq[    <RegistryValue Name="required-category" Type="string" Value="[REQUIRED_CATEGORY]" />\n];
+                $result .= $ident ."  ". qq[    <RegistryValue Name="esx-itemtype" Type="string" Value="[ESX_ITEMTYPE]" />\n];
+                $result .= $ident ."  ". qq[    <RegistryValue Name="itemtype" Type="string" Value="[ITEMTYPE]" />\n];
                 $result .= $ident ."  ". qq[    <RegistryValue Name="no-compression" Type="string" Value="[NO_COMPRESSION]" />\n];
                 $result .= $ident ."  ". qq[    <RegistryValue Name="html" Type="string" Value="[HTML]" />\n];
                 $result .= $ident ."  ". qq[    <RegistryValue Name="json" Type="string" Value="[JSON]" />\n];

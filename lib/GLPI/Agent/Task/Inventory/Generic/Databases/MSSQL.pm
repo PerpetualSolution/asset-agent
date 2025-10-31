@@ -43,8 +43,8 @@ sub _getDatabaseService {
 
     # Handle default credentials case
     if (@{$credentials} == 1 && !keys(%{$credentials->[0]})) {
-        # On windows, we can discover instance names in registry
-        if (OSNAME eq 'MSWin32') {
+        # On windows, we can discover instance names in registry but not during tests
+        if (OSNAME eq 'MSWin32' && !$params{istest}) {
             GLPI::Agent::Tools::Win32->require();
             my $instances = GLPI::Agent::Tools::Win32::getRegistryKey(
                 path => 'HKEY_LOCAL_MACHINE/SOFTWARE/Microsoft/Microsoft SQL Server/Instance Names/SQL',
@@ -126,7 +126,7 @@ sub _getDatabaseService {
                 or next;
 
             my ($size) = _runSql(
-                sql => "USE $db_name ; EXEC sp_spaceused",
+                sql => "USE [$db_name] ; EXEC sp_spaceused",
                 %params
             ) =~ /^$db_name;([0-9.]+\s*\S+);/;
             if ($size) {
@@ -138,7 +138,7 @@ sub _getDatabaseService {
 
             # Find update date
             my ($updated) = _runSql(
-                sql => "USE $db_name ; SELECT TOP(1) modify_date FROM sys.objects ORDER BY modify_date DESC",
+                sql => "USE [$db_name] ; SELECT TOP(1) modify_date FROM sys.objects ORDER BY modify_date DESC",
                 %params
             ) =~ /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/;
 

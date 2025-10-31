@@ -6,8 +6,12 @@ use parent 'Exporter';
 use ToolchainBuildJob;
 
 use constant {
-    PERL_VERSION       => "5.38.2",
-    PERL_BUILD_STEPS   => 9,
+    PERL_VERSION       => "5.42.0",
+    # Tag for dmidecode release on glpi-project/dmidecode
+    DMIDECODE_VERSION  => "3.6-update-1",
+    # Tag for Glpi-AgentMonitor release on glpi-project/glpi-agentmonitor
+    GAMONITOR_VERSION  => "1.4.1",
+    PERL_BUILD_STEPS   => 12,
 };
 
 our @EXPORT = qw(build_job PERL_VERSION PERL_BUILD_STEPS);
@@ -62,19 +66,20 @@ sub build_job {
             cf_email   => 'strawberry-perl@project', #IMPORTANT: keep 'strawberry-perl' before @
             perl_debug => 0,    # can be overridden by --perl_debug=N option
             perl_64bitint => 1, # ignored on 64bit, can be overridden by --perl_64bitint | --noperl_64bitint option
+            # Remove not required locale support to fix a locale support issue
+            buildoptextra => '-DNO_LOCALE -std=c23',
             patch => { #DST paths are relative to the perl src root
                 'contrib/windows/packaging/agentexe.ico'    => 'win32/agentexe.ico',
                 'contrib/windows/packaging/agentexe.rc.tt'  => 'win32/perlexe.rc',
-                'contrib/windows/packaging/Makefile.patch'  => 'win32/Makefile', # Define USE_NO_REGISTRY in Makefile
+                'contrib/windows/packaging/Makefile.patch'  => 'win32/GNUmakefile',
+                'contrib/windows/packaging/makedef.patch'   => 'makedef.pl',
                 'config_H.gc'   => {
                     HAS_MKSTEMP             => 'define',
                     HAS_BUILTIN_CHOOSE_EXPR => 'define',
-                    HAS_SYMLINK             => 'define',
                 },
                 'config.gc'     => {  # see Step.pm for list of default updates
                     d_builtin_choose_expr => 'define',
                     d_mkstemp             => 'define',
-                    d_symlink             => 'define', # many cpan modules fail tests when defined
                     osvers                => '10',
                 },
             },
@@ -84,11 +89,18 @@ sub build_job {
                 'Copying'  => '<image_dir>/licenses/perl/Copying',
             },
         },
-        ### NEXT STEP 3 Upgrade CPAN modules ###################################
+        ### NEXT STEP 3 : Sign perl DLL ########################################
+        {
+            plugin => 'CustomCodeSigning',
+            files  => [
+                '<image_dir>/perl/bin/perl'.$MAJOR.$MINOR.'.dll',
+            ],
+        },
+        ### NEXT STEP 4 Upgrade CPAN modules ###################################
         {
             plugin => 'Perl::Dist::Strawberry::Step::UpgradeCpanModules',
         },
-        ### NEXT STEP 4 Install needed modules with agent dependencies #########
+        ### NEXT STEP 5 Install needed modules with agent dependencies #########
         {
             plugin => 'Perl::Dist::GLPI::Agent::Step::InstallModules',
             modules => [
@@ -113,7 +125,8 @@ sub build_job {
                 qw/ HTTP-Server-Simple LWP::Protocol::https LWP::UserAgent /,
 
                 # crypto
-                qw/ Crypt::DES Crypt::Rijndael /,
+                { module => 'https://github.com/g-bougard/Crypt-DES/releases/download/2.07_01/Crypt-DES-2.07_01.tar.gz' }, # Patched Crypt::DES
+                qw/ Crypt::Rijndael /,
                 qw/ Digest-SHA /,
                 qw/ Digest-MD5 Digest-SHA1 Digest::HMAC /, # Required for SNMP v3 authentication
 
@@ -127,17 +140,18 @@ sub build_job {
                     URI::Escape Net::NBName Thread::Queue Thread::Semaphore
                     Net::SNMP Net::SNMP::Security::USM Net::SNMP::Transport::IPv4::TCP
                     Net::SNMP::Transport::IPv6::TCP Net::SNMP::Transport::IPv6::UDP
-                    Net::IP Win32::Unicode::File Data::UUID Archive::Zip /,
+                    Net::IP Data::UUID Archive::Zip /,
+                { module => 'https://github.com/g-bougard/win32-unicode/releases/download/0.38_02/Win32-Unicode-0.38_02.tar.gz' }, # Patched Win32::Unicode
                 # For Wake-On-LAN task
                 #qw/ Net::Write::Layer2 /,
             ],
         },
-        ### NEXT STEP 5 ########################################################
+        ### NEXT STEP 6 ########################################################
         {
             plugin => 'Perl::Dist::Strawberry::Step::FixShebang',
             shebang => '#!perl',
         },
-        ### NEXT STEP 6 Clean up ###############################################
+        ### NEXT STEP 7 Clean up ###############################################
         {
             plugin => 'Perl::Dist::Strawberry::Step::FilesAndDirs',
             commands => [
@@ -154,7 +168,7 @@ sub build_job {
                 { do=>'removefile_recursive', args=>[ '<image_dir>/perl', qr/\.pod$/i ] },
             ],
         },
-        ### NEXT STEP 7 Install modules for test ###############################
+        ### NEXT STEP 8 Install modules for test ###############################
         {
             plugin => 'Perl::Dist::GLPI::Agent::Step::InstallModules',
             modules => [ map {
@@ -170,7 +184,15 @@ sub build_job {
                 )
             ],
         },
-        ### NEXT STEP 8 Clean up and finalize perl envirtonment ################
+        ### NEXT STEP 9 : Sign MSI ############################################
+        {
+            plugin => 'CustomCodeSigning',
+            dlls   => [
+                '<image_dir>/perl/lib/auto',
+                '<image_dir>/perl/vendor/lib/auto',
+            ],
+        },
+        ### NEXT STEP 10 Clean up and finalize perl envirtonment ################
         {
             plugin => 'Perl::Dist::Strawberry::Step::FilesAndDirs',
             commands => [
@@ -181,7 +203,7 @@ sub build_job {
                 _movebin('perl.exe'),
                 _movebin('perl'.$MAJOR.$MINOR.'.dll'),
                 # Also move DLLs required by modules
-                _movedll('libxml2-2', $dllsuffix),
+                _movedll('libxml2-16', $dllsuffix),
                 _movedll('liblzma-5', $dllsuffix),
                 _movedll('libcharset-1', $dllsuffix),
                 _movedll('libiconv-2', $dllsuffix),
@@ -200,14 +222,32 @@ sub build_job {
                 { do=>'removedir', args=>[ '<image_dir>/lib' ] },
                 { do=>'removedir', args=>[ '<image_dir>/libexec' ] },
                 # Other binaries used by agent
-                { do=>'copyfile', args=>[ 'contrib/windows/packaging/tools/x86/dmidecode.exe', '<image_dir>/perl/bin' ] },
                 { do=>'copyfile', args=>[ 'contrib/windows/packaging/tools/x86/hdparm.exe', '<image_dir>/perl/bin' ] },
                 { do=>'copyfile', args=>[ 'contrib/windows/packaging/tools/'.$arch.'/7z.exe', '<image_dir>/perl/bin' ] },
                 { do=>'copyfile', args=>[ 'contrib/windows/packaging/tools/'.$arch.'/7z.dll', '<image_dir>/perl/bin' ] },
-                { do=>'copyfile', args=>[ 'contrib/windows/packaging/tools/'.$arch.'/GLPI-AgentMonitor-'.$arch.'.exe', '<image_dir>/perl/bin' ] },
             ],
         },
-        ### NEXT STEP 9 Run GLPI Agent test suite ##############################
+        ### NEXT STEP 11 Installation with direct github download ##############
+        {
+            plugin      => 'Perl::Dist::GLPI::Agent::Step::Github',
+            downloads   => [
+                {
+                    name    => 'dmidecode',
+                    project	=> 'glpi-project/dmidecode',
+                    release => DMIDECODE_VERSION,
+                    file    => 'dmidecode.exe',
+                    folder  => '<image_dir>/perl/bin',
+                },
+                {
+                    name    => 'GLPI-AgentMonitor',
+                    project	=> 'glpi-project/glpi-agentmonitor',
+                    release => GAMONITOR_VERSION,
+                    file    => 'GLPI-AgentMonitor-'.$arch.'.exe',
+                    folder  => '<image_dir>/perl/bin',
+                },
+            ],
+        },
+        ### NEXT STEP 12 Run GLPI Agent test suite #############################
         {
             plugin      => 'Perl::Dist::GLPI::Agent::Step::Test',
             disable     => $notest,
@@ -220,7 +260,7 @@ sub build_job {
                 #~ qw(t/agent/config.t)
             ],
         },
-        ### NEXT STEP 10 Finalize environment ##################################
+        ### NEXT STEP 13 Finalize environment ##################################
         {
             plugin => 'Perl::Dist::Strawberry::Step::FilesAndDirs',
             commands => [
@@ -242,15 +282,22 @@ sub build_job {
                 { do=>'copyfile', args=>[ 'contrib/windows/packaging/setup.pm', '<image_dir>/perl/lib' ] },
             ],
         },
-        ### NEXT STEP 11 Finalize release ######################################
+        ### NEXT STEP 14 : Sign MSI ############################################
+        {
+            plugin => 'CustomCodeSigning',
+            files  => [
+                '<image_dir>/perl/bin/glpi-agent.exe',
+            ],
+        },
+        ### NEXT STEP 15 Finalize release ######################################
         {
             plugin => 'Perl::Dist::GLPI::Agent::Step::Update',
         },
-        ### NEXT STEP 12 Generate Portable Archive #############################
+        ### NEXT STEP 16 Generate Portable Archive #############################
         {
             plugin => 'Perl::Dist::Strawberry::Step::OutputZIP',
         },
-        ### NEXT STEP 13 Generate MSI Package ##################################
+        ### NEXT STEP 17 Generate MSI Package ##################################
         {
             plugin => 'Perl::Dist::GLPI::Agent::Step::OutputMSI',
             exclude  => [],
@@ -265,7 +312,17 @@ sub build_job {
             msi_dialog_bmp      => 'contrib/windows/packaging/GLPI-Agent_Dialog.bmp',
             msi_banner_bmp      => 'contrib/windows/packaging/GLPI-Agent_Banner.bmp',
             msi_debug           => 0,
-        }
+        },
+        ### NEXT STEP 18 : Sign MSI ############################################
+        {
+            plugin => 'CustomCodeSigning',
+            files  => [
+                {
+                    name        => '<output_basename>.msi',
+                    filename    => '<output_dir>/<output_basename>.msi',
+                },
+            ],
+        },
         ],
     }
 }
